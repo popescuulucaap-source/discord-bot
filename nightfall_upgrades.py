@@ -1,5 +1,5 @@
 """
-Nightfall modular upgrades.
+Gargand modular upgrades.
 Loaded automatically by sitecustomize without replacing main.py.
 Adds Auto-Mod, XP/levels, analytics, AI channel memory, and extra admin tooling.
 """
@@ -113,11 +113,11 @@ def install(main):
                 punishment = str(setting(guild, "automod_punishment", "timeout") or "timeout").lower()
                 try:
                     if punishment == "kick":
-                        await member.kick(reason="Nightfall Auto-Mod: "+reason)
+                        await member.kick(reason="Gargand Auto-Mod: "+reason)
                     elif punishment == "ban":
-                        await guild.ban(member, reason="Nightfall Auto-Mod: "+reason, delete_message_seconds=0)
+                        await guild.ban(member, reason="Gargand Auto-Mod: "+reason, delete_message_seconds=0)
                     else:
-                        await member.timeout(main.timedelta(minutes=5), reason="Nightfall Auto-Mod: "+reason)
+                        await member.timeout(main.timedelta(minutes=5), reason="Gargand Auto-Mod: "+reason)
                 except Exception: pass
                 log_id = setting(guild, "automod_log_channel_id") or setting(guild, "logs_channel_id")
                 log_ch = guild.get_channel(log_id) if log_id else None
@@ -149,7 +149,7 @@ def install(main):
         conn.close()
         xp = int(row["xp"]) if row else 0
         lvl = int(row["level"]) if row else 0
-        await ctx.send(embed=embed("✨ Nightfall level", f"**{target.display_name}** is level **{lvl}** with **{xp} XP**.", main.INFO))
+        await ctx.send(embed=embed("✨ Gargand level", f"**{target.display_name}** is level **{lvl}** with **{xp} XP**.", main.INFO))
 
     @bot.hybrid_command(name="analytics")
     @main.admin_only()
@@ -188,9 +188,9 @@ def install(main):
         try:
             await bot.tree.sync()
         except Exception as exc:
-            print("Nightfall upgrades slash sync:", repr(exc))
+            print("Gargand upgrades slash sync:", repr(exc))
     bot.loop.create_task(startup())
-    print("Nightfall modular upgrades loaded: Auto-Mod, XP, analytics, AI memory.")
+    print("Gargand modular upgrades loaded: Auto-Mod, XP, analytics, AI memory.")
 
 def wait_for_main():
     for _ in range(240):
@@ -199,7 +199,7 @@ def wait_for_main():
             try:
                 install(main)
             except Exception as exc:
-                print("Nightfall upgrades failed:", repr(exc))
+                print("Gargand upgrades failed:", repr(exc))
             return
         time.sleep(0.25)
 
