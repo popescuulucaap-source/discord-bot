@@ -39,7 +39,7 @@ BOT_CLIENT_ID = os.getenv("BOT_CLIENT_ID")  # optional; automatically discovered
 DB_PATH = os.getenv("BOT_DB", "bot_data.sqlite3")
 
 if not TOKEN:
-    raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Katabump environment variables.")
+    raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Fadehost environment variables.")
 
 PREFIX = "!"
 NIGHTFALL_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "").strip().rstrip("/")
@@ -302,10 +302,11 @@ def utc_ts() -> int:
 
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
-    branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\\n{description}"
+    branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\n{description}"
     e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     e.set_thumbnail(url="https://www.svgrepo.com/show/17505/lion-head.svg")
+    e.set_image(url="https://raw.githubusercontent.com/popescuulucaap-source/night-fall-discord-bot/main/static/gargand-bar.gif")
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
