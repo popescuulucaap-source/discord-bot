@@ -406,17 +406,84 @@ async def send_followup_resilient(
             await asyncio.sleep(await retry_after_from_http(exc, 1.5) + 0.25 * attempt)
 
 
-async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color = INFO):
+async def ensure_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    """Use the configured log channel or create a private Gargand log channel."""
     channel_id = setting(guild, "logs_channel_id")
-    if not channel_id:
-        return
-    channel = guild.get_channel(channel_id)
+    channel = guild.get_channel(int(channel_id)) if channel_id and str(channel_id).isdigit() else None
+    if isinstance(channel, discord.TextChannel):
+        return channel
+    existing = discord.utils.get(guild.text_channels, name="gargand-logs")
+    if existing:
+        set_setting(guild, "logs_channel_id", existing.id)
+        return existing
+    me = guild.me
+    if not me or not me.guild_permissions.manage_channels:
+        return None
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        me: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True, read_message_history=True),
+    }
+    staff_id = setting(guild, "staff_role_id")
+    staff = guild.get_role(int(staff_id)) if staff_id and str(staff_id).isdigit() else None
+    if staff:
+        overwrites[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    try:
+        channel = await guild.create_text_channel(
+            "gargand-logs",
+            overwrites=overwrites,
+            topic="Private Gargand moderation and security log. Configure another channel with !setup anytime.",
+            reason="Gargand automatic logging setup",
+        )
+        set_setting(guild, "logs_channel_id", channel.id)
+        try:
+            await channel.send(embed=embed("🟢 Gargand logging is ready", "This private channel is now the server's default moderation and security log. Change it any time in !setup.", SUCCESS))
+        except discord.HTTPException:
+            pass
+        return channel
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        print(f"Could not create Gargand log channel in {guild.id}: {type(exc).__name__}")
+        return None
+
+
+async def log_action(guild: discord.Guild, title: str, description: str, color: discord.Color = INFO):
+    channel = await ensure_log_channel(guild)
     if not isinstance(channel, discord.TextChannel):
         return
     try:
         await channel.send(embed=embed(title, description, color))
     except discord.HTTPException:
         pass
+
+
+@bot.listen("on_member_join")
+async def gargand_log_member_join(member: discord.Member):
+    await log_action(member.guild, "↗ Member joined", f"**{member}** ({member.id}) joined the server.", SUCCESS)
+
+
+@bot.listen("on_member_remove")
+async def gargand_log_member_remove(member: discord.Member):
+    await log_action(member.guild, "↘ Member left", f"**{member}** ({member.id}) left the server.", WARNING)
+
+
+@bot.listen("on_member_ban")
+async def gargand_log_member_ban(guild: discord.Guild, user: discord.User):
+    await log_action(guild, "⛔ Member banned", f"**{user}** ({user.id}) was banned.", DANGER)
+
+
+@bot.listen("on_member_unban")
+async def gargand_log_member_unban(guild: discord.Guild, user: discord.User):
+    await log_action(guild, "🟢 Member unbanned", f"**{user}** ({user.id}) was unbanned.", SUCCESS)
+
+
+@bot.listen("on_guild_channel_delete")
+async def gargand_log_channel_delete(channel: discord.abc.GuildChannel):
+    if channel.name != "gargand-logs":
+        await log_action(channel.guild, "⚠ Channel deleted", f"**#{channel.name}** ({channel.id}) was deleted.", WARNING)
+
+
+@bot.listen("on_guild_role_delete")
+async def gargand_log_role_delete(role: discord.Role):
+    await log_action(role.guild, "⚠ Role deleted", f"**{role.name}** ({role.id}) was deleted.", WARNING)
 
 
 async def get_or_create_role(guild: discord.Guild, name: str, *, color=discord.Color.default()) -> discord.Role:
@@ -3471,6 +3538,7 @@ async def on_ready():
     db_init()
     for guild in bot.guilds:
         await cache_invites(guild)
+        await ensure_log_channel(guild)
         if setting(guild, "jail_enabled", False):
             try:
                 jail_role, _, _, jail_appeals = await configure_jail_system(guild)
@@ -3507,6 +3575,7 @@ async def on_ready():
 async def on_guild_join(guild: discord.Guild):
     db_init()
     await cache_invites(guild)
+    await ensure_log_channel(guild)
     try:
         await guild.me.edit(nick="Gargand ✦")
     except Exception:
