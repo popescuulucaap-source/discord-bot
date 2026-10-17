@@ -28,7 +28,7 @@ OPENROUTER_TEXT_MODEL = os.getenv(
 )
 
 # ============================================================
-#  Nightfall — all-in-one Discord community/moderation bot
+#  Gargand — all-in-one Discord community/moderation bot
 #  Prefix: !
 #  Database: SQLite (bot_data.sqlite3)
 #  Library: discord.py 2.x
@@ -66,7 +66,7 @@ async def send_telemetry(event_type: str, guild=None, user=None, command_name: s
         try:
             requests.post(
                 f"{NIGHTFALL_WEBSITE_URL}/api/bot/events",
-                headers={"X-Nightfall-Bridge-Key": NIGHTFALL_BRIDGE_SECRET},
+                headers={"X-Gargand-Bridge-Key": NIGHTFALL_BRIDGE_SECRET},
                 json=payload,
                 timeout=8,
             )
@@ -101,11 +101,11 @@ def make_bot_invite() -> str:
     return f"https://discord.com/oauth2/authorize?client_id={client_id}&scope=bot&permissions={perms.value}"
 
 
-EMBED_COLOR = discord.Color.from_rgb(104, 84, 255)
+EMBED_COLOR = discord.Color.from_rgb(35, 235, 100)
 SUCCESS = discord.Color.from_rgb(46, 204, 113)
 WARNING = discord.Color.from_rgb(241, 196, 15)
 DANGER = discord.Color.from_rgb(231, 76, 60)
-INFO = discord.Color.from_rgb(52, 152, 219)
+INFO = discord.Color.from_rgb(35, 235, 100)
 DARK = discord.Color.from_rgb(44, 47, 51)
 
 INTENTS = discord.Intents.default()
@@ -303,9 +303,9 @@ def utc_ts() -> int:
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
     e = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
-    e.set_footer(text="Nightfall  •  made for your community")
+    e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     if bot.user:
-        e.set_author(name="NIGHTFALL  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
+        e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
 
 
@@ -423,7 +423,7 @@ async def get_or_create_role(guild: discord.Guild, name: str, *, color=discord.C
     role = discord.utils.get(guild.roles, name=name)
     if role:
         return role
-    return await guild.create_role(name=name, color=color, reason="Nightfall automatic setup")
+    return await guild.create_role(name=name, color=color, reason="Gargand automatic setup")
 
 
 async def configure_verification_roles(guild: discord.Guild):
@@ -458,7 +458,7 @@ async def apply_external_app_lock(guild: discord.Guild):
                 await channel.set_permissions(
                     guild.default_role,
                     overwrite=ow,
-                    reason="Nightfall anti-raid",
+                    reason="Gargand anti-raid",
                 )
                 changed += 1
                 success = True
@@ -494,7 +494,7 @@ async def emergency_lockdown(guild: discord.Guild):
                 ow = channel.overwrites_for(guild.default_role)
                 ow.send_messages = False
                 ow.use_external_apps = False
-                await channel.set_permissions(guild.default_role, overwrite=ow, reason="Nightfall emergency anti-nuke lockdown")
+                await channel.set_permissions(guild.default_role, overwrite=ow, reason="Gargand emergency anti-nuke lockdown")
             except (discord.Forbidden, discord.HTTPException, AttributeError):
                 pass
 
@@ -512,7 +512,7 @@ async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type:
         overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_messages=True)
     name = f"ticket-{user.name[:16]}".lower().replace(" ", "-")
     try:
-        channel = await guild.create_text_channel(name, category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason="Nightfall ticket system")
+        channel = await guild.create_text_channel(name, category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason="Gargand ticket system")
     except discord.Forbidden:
         return None
     qtext = ""
@@ -619,7 +619,7 @@ def make_member_card(member: discord.Member, title: str, subtitle: str) -> disco
     draw.text((305, 95), title, font=font_big, fill=(245, 245, 255, 255))
     draw.text((305, 170), member.display_name[:30], font=font_mid, fill=(195, 190, 230, 255))
     draw.text((305, 220), subtitle[:70], font=font_small, fill=(170, 170, 185, 255))
-    draw.text((305, 285), "✦ Nightfall Community ✦", font=font_small, fill=(150, 135, 240, 255))
+    draw.text((305, 285), "✦ Gargand Community ✦", font=font_small, fill=(150, 135, 240, 255))
 
     out = io.BytesIO()
     base.convert("RGB").save(out, "PNG")
@@ -665,7 +665,7 @@ async def make_member_card_with_avatar(member: discord.Member, title: str, subti
     draw.text((305, 90), title, font=font_big, fill=(245, 245, 255, 255))
     draw.text((305, 170), member.display_name[:30], font=font_mid, fill=(205, 200, 235, 255))
     draw.text((305, 220), subtitle[:80], font=font_small, fill=(175, 175, 190, 255))
-    draw.text((305, 285), "✦ Nightfall Community ✦", font=font_small, fill=(150, 135, 240, 255))
+    draw.text((305, 285), "✦ Gargand Community ✦", font=font_small, fill=(150, 135, 240, 255))
     out = io.BytesIO()
     base.convert("RGB").save(out, "PNG")
     out.seek(0)
@@ -968,7 +968,7 @@ class AppealTicketReasonModal(discord.ui.Modal, title="📝 Appeal"):
         category = discord.utils.get(appeal_guild.categories, name="Appeal Tickets")
         if not category:
             try:
-                category = await appeal_guild.create_category("Appeal Tickets", reason="Nightfall appeal system")
+                category = await appeal_guild.create_category("Appeal Tickets", reason="Gargand appeal system")
             except discord.HTTPException:
                 category = None
         overwrites = {appeal_guild.default_role: discord.PermissionOverwrite(view_channel=False), interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),}
@@ -976,7 +976,7 @@ class AppealTicketReasonModal(discord.ui.Modal, title="📝 Appeal"):
         staff_role = appeal_guild.get_role(appeal_staff_id) if appeal_staff_id else None
         if staff_role:
             overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
-        channel = await appeal_guild.create_text_channel(f"appeal-{interaction.user.name[:16]}", category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason="Nightfall appeal ticket")
+        channel = await appeal_guild.create_text_channel(f"appeal-{interaction.user.name[:16]}", category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason="Gargand appeal ticket")
         e = embed("📝 Ban appeal", f"User: {interaction.user.mention}\n**Main server:** {main_guild.name}\n\n**Reason:**\n{self.reason.value}", WARNING)
         e.set_thumbnail(url=interaction.user.display_avatar.url)
         await channel.send(embed=e, view=AppealTicketView())
@@ -1014,8 +1014,8 @@ def setup_dashboard_embed(guild: discord.Guild) -> discord.Embed:
         return f"<#{cfg[key]}>" if cfg.get(key) else "Not set"
 
     e = embed(
-        "⚙️ Nightfall setup center",
-        "Configure Nightfall with the buttons below. Every change is saved instantly and this dashboard refreshes automatically. ✨",
+        "⚙️ Gargand setup center",
+        "Configure Gargand with the buttons below. Every change is saved instantly and this dashboard refreshes automatically. ✨",
         EMBED_COLOR,
     )
     e.add_field(name="🛡️ Staff role", value=role_value("staff_role_id"), inline=True)
@@ -1043,7 +1043,7 @@ def setup_dashboard_embed(guild: discord.Guild) -> discord.Embed:
     e.add_field(name="🔒 Jail role", value=role_value("jail_role_id"), inline=True)
     e.add_field(name="🔒 Jail chat", value=channel_value("jail_chat_channel_id"), inline=True)
     e.add_field(name="📝 Jail appeals", value=channel_value("jail_appeal_channel_id"), inline=True)
-    e.set_footer(text="Nightfall • setup changes save instantly ✨")
+    e.set_footer(text="Gargand • setup changes save instantly ✨")
     return e
 
 
@@ -1700,7 +1700,7 @@ async def get_or_create_jail_role(guild: discord.Guild) -> discord.Role:
         role = await guild.create_role(
             name="🔒 Jailed",
             color=DANGER,
-            reason="Nightfall jail system setup",
+            reason="Gargand jail system setup",
         )
     set_setting(guild, "jail_role_id", role.id)
     return role
@@ -1737,7 +1737,7 @@ async def apply_jail_role_permissions(guild: discord.Guild, jail_role: discord.R
                 await channel.set_permissions(
                     jail_role,
                     overwrite=ow,
-                    reason="Nightfall jail access control",
+                    reason="Gargand jail access control",
                 )
                 break
             except discord.Forbidden:
@@ -1767,7 +1767,7 @@ async def configure_jail_system(guild: discord.Guild):
             guild.categories,
         )
     if category is None:
-        category = await guild.create_category("🔒 Jail", reason="Nightfall jail system setup")
+        category = await guild.create_category("🔒 Jail", reason="Gargand jail system setup")
     set_setting(guild, "jail_category_id", category.id)
 
     staff_role_id = setting(guild, "staff_role_id")
@@ -1785,7 +1785,7 @@ async def configure_jail_system(guild: discord.Guild):
             manage_messages=True,
         )
     try:
-        await category.edit(overwrites=category_overwrites, reason="Nightfall jail category permissions")
+        await category.edit(overwrites=category_overwrites, reason="Gargand jail category permissions")
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -1805,7 +1805,7 @@ async def configure_jail_system(guild: discord.Guild):
             channel = await guild.create_text_channel(
                 name,
                 category=category,
-                reason="Nightfall jail system setup",
+                reason="Gargand jail system setup",
             )
         set_setting(guild, key, channel.id)
 
@@ -1827,7 +1827,7 @@ async def configure_jail_system(guild: discord.Guild):
                 manage_messages=True,
             )
         try:
-            await channel.edit(overwrites=overwrites, reason="Nightfall jail channel permissions")
+            await channel.edit(overwrites=overwrites, reason="Gargand jail channel permissions")
         except (discord.Forbidden, discord.HTTPException):
             pass
         return channel
@@ -1866,18 +1866,18 @@ async def lock_member_to_jail(member: discord.Member, jail_role: discord.Role, o
         removable = [r for r in member.roles if not r.is_default() and r != jail_role and r < me.top_role]
     if removable:
         try:
-            await member.remove_roles(*removable, reason="Nightfall jail")
+            await member.remove_roles(*removable, reason="Gargand jail")
         except discord.HTTPException:
             pass
     if jail_role not in member.roles:
-        await member.add_roles(jail_role, reason="Nightfall jail")
+        await member.add_roles(jail_role, reason="Gargand jail")
     await apply_jail_role_permissions(member.guild, jail_role)
 
 
 async def restore_member_from_jail(member: discord.Member, original_role_ids: list[int], jail_role: discord.Role):
     if jail_role in member.roles:
         try:
-            await member.remove_roles(jail_role, reason="Nightfall unjail")
+            await member.remove_roles(jail_role, reason="Gargand unjail")
         except discord.HTTPException:
             pass
     me = member.guild.me
@@ -1888,7 +1888,7 @@ async def restore_member_from_jail(member: discord.Member, original_role_ids: li
             roles.append(role)
     if roles:
         try:
-            await member.add_roles(*roles, reason="Nightfall unjail restore")
+            await member.add_roles(*roles, reason="Gargand unjail restore")
         except discord.HTTPException:
             pass
 
@@ -1969,7 +1969,7 @@ class JailAppealModal(discord.ui.Modal, title="📝 Jail appeal"):
                 f"jail-appeal-{interaction.user.name[:16]}".lower(),
                 category=category,
                 overwrites=overwrites,
-                reason=f"Nightfall jail appeal #{self.jail_id}",
+                reason=f"Gargand jail appeal #{self.jail_id}",
             )
             set_jail_appeal_created(self.jail_id, channel.id)
             e = embed(
@@ -2023,7 +2023,7 @@ class JailAppealControlView(discord.ui.View):
         await log_action(interaction.guild, "✅ Jail appeal approved", f"Case `#{self.jail_id}` approved by {interaction.user.mention}.", SUCCESS)
         await asyncio.sleep(1)
         try:
-            await interaction.channel.delete(reason=f"Nightfall jail appeal #{self.jail_id} approved")
+            await interaction.channel.delete(reason=f"Gargand jail appeal #{self.jail_id} approved")
         except discord.HTTPException:
             pass
 
@@ -2035,7 +2035,7 @@ class JailAppealControlView(discord.ui.View):
         await log_action(interaction.guild, "❌ Jail appeal denied", f"Case `#{self.jail_id}` denied by {interaction.user.mention}.", WARNING)
         await asyncio.sleep(1)
         try:
-            await interaction.channel.delete(reason=f"Nightfall jail appeal #{self.jail_id} denied")
+            await interaction.channel.delete(reason=f"Gargand jail appeal #{self.jail_id} denied")
         except discord.HTTPException:
             pass
 
@@ -2087,13 +2087,13 @@ async def create_j4j_ticket(guild: discord.Guild, member: discord.Member):
     category = discord.utils.get(guild.categories, name=category_name)
     if not category:
         try:
-            category = await guild.create_category(category_name, reason="Nightfall J4J system")
+            category = await guild.create_category(category_name, reason="Gargand J4J system")
         except discord.HTTPException:
             category = None
     staff_role = guild.get_role(setting(guild, "staff_role_id")) if setting(guild, "staff_role_id") else None
     ow = {guild.default_role: discord.PermissionOverwrite(view_channel=False), member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)}
     if staff_role: ow[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-    channel = await guild.create_text_channel(f"j4j-{member.name[:15]}", category=category, overwrites=ow, reason="Nightfall J4J ticket")
+    channel = await guild.create_text_channel(f"j4j-{member.name[:15]}", category=category, overwrites=ow, reason="Gargand J4J ticket")
     await channel.send(embed=embed("🤝 J4J review", f"{member.mention} reported joining from a J4J. Staff can review this ticket.\n\nUse the buttons below.", WARNING), view=J4JTicketView(member.id))
     if staff_role:
         await channel.send(staff_role.mention, allowed_mentions=discord.AllowedMentions(roles=True))
@@ -2112,7 +2112,7 @@ class J4JTicketView(discord.ui.View):
         member = interaction.guild.get_member(self.user_id)
         if member:
             try:
-                await member.ban(reason="Nightfall J4J review")
+                await member.ban(reason="Gargand J4J review")
                 await log_action(interaction.guild, "🔨 J4J ban", f"{member} was banned after J4J review.", DANGER)
             except discord.Forbidden:
                 await interaction.response.send_message("I cannot ban that member.", ephemeral=True); return
@@ -2131,7 +2131,8 @@ class J4JTicketView(discord.ui.View):
 
 @bot.hybrid_command(name="help")
 async def help_command(ctx: commands.Context):
-    e = embed("📚 Nightfall command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!lock` • `!slowmode <seconds>`\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...` • `!apeal server`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!highlow <bet>` • `!coinflip <bet> <heads/tails>` • `!blackjack <bet>` • `!roulette <bet> <red/black/number>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
+    e = embed("📚 Gargand command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!lock` • `!slowmode <seconds>`\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...` • `!apeal server`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!highlow <bet>` • `!coinflip <bet> <heads/tails>` • `!blackjack <bet>` • `!roulette <bet> <red/black/number>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
+    e.add_field(name="❔ Help & questions", value="`!questions` • Get answers about Gargand, setup, logging, security, tickets, commands and the website dashboard.", inline=False)
     e.add_field(name="🌙 New tools", value="`!purge <1–100>` • `!warnings @user` • `!clearwarnings @user` (admins) • `!announce #channel <message>` • `!poll Question | Option 1 | Option 2`", inline=False)
     e.add_field(name="✨ More to explore", value="`!8ball <question>` • `!choose a | b` • `!roll 3d8` • `!rps rock` • `!avatar` • `!userinfo` • `!serverinfo` • `!quote` • `!reverse text` • `!mock text` • `!color 8B5CF6` • `!about`", inline=False)
     e.add_field(name="🤖 AI studio", value="`!ask <question>` • `!story <idea>` • `!roast [@member]` • `!compliment [@member]` • `!riddle` • `!poem [topic]` • `!joke [topic]` • `!caption <idea>` • `!namegen <theme>` • `!quiz <topic>` • `!aiimage <description>`", inline=False)
@@ -2140,10 +2141,24 @@ async def help_command(ctx: commands.Context):
     await ctx.send(embed=e)
 
 
+@bot.hybrid_command(name="questions", aliases=["question", "faq"])
+async def questions_command(ctx: commands.Context):
+    """Answer common questions about Gargand and how to configure it."""
+    e = embed("❔ Gargand • Frequently asked questions",
+        "**How do I set up Gargand?**\nRun `!setup` and follow the interactive setup panels.\n\n"
+        "**How do I see commands?**\nRun `!help` or visit the Commands page on the website.\n\n"
+        "**How do I set up logs?**\nUse `!setup` to choose a logs channel. Gargand can only create or use channels when it has the required Discord permissions.\n\n"
+        "**How do I protect my server?**\nConfigure anti-raid, anti-nuke and Auto-Mod in setup. Test changes carefully and make sure the bot role has the needed permissions.\n\n"
+        "**How do tickets work?**\nConfigure ticket options and questions, then use `!ticket panel` to post the ticket panel.\n\n"
+        "**Can the website manage every setting?**\nThe dashboard exposes supported settings for servers you can manage. Some actions still need to be run in Discord.\n\n"
+        "**Where do I get help?**\nOpen the Support page on the Gargand website or join the configured support server.", EMBED_COLOR)
+    await ctx.send(embed=e)
+
+
 @bot.hybrid_command(name="about")
 async def about_command(ctx: commands.Context):
     description = (
-        "🌙 **Nightfall** is your all-in-one Discord guardian: smooth moderation, "
+        "🌙 **Gargand** is your all-in-one Discord guardian: smooth moderation, "
         "smart server safety, tickets, invites, giveaways, games, and creative tools.\n\n"
         "Set up your server with `!setup`, then let the night run smoother. ✨"
     )
@@ -2238,7 +2253,7 @@ async def eight_ball(ctx: commands.Context, *, question: str):
         "My sources say no.", "The night says yes. 🌙", "Outlook is looking bright.",
         "I wouldn’t count on it.",
     )
-    await ctx.send(embed=embed("🎱 The Nightfall 8-Ball", random.choice(answers), INFO))
+    await ctx.send(embed=embed("🎱 The Gargand 8-Ball", random.choice(answers), INFO))
 
 
 @bot.hybrid_command(name="choose")
@@ -2250,7 +2265,7 @@ async def choose_command(ctx: commands.Context, *, options: str):
     if len(choices) > 20:
         await ctx.send("Keep it to 20 choices or fewer.")
         return
-    await ctx.send(embed=embed("🌙 Nightfall chooses…", random.choice(choices)[:900], EMBED_COLOR))
+    await ctx.send(embed=embed("🌙 Gargand chooses…", random.choice(choices)[:900], EMBED_COLOR))
 
 
 @bot.hybrid_command(name="roll")
@@ -2278,9 +2293,9 @@ async def rps_command(ctx: commands.Context, choice: str):
         return
     bot_choice = random.choice(tuple(options))
     result = "It's a draw!" if player == bot_choice else (
-        "You win! ✨" if (player, bot_choice) in {("rock", "scissors"), ("paper", "rock"), ("scissors", "paper")} else "Nightfall wins this round. 🌙"
+        "You win! ✨" if (player, bot_choice) in {("rock", "scissors"), ("paper", "rock"), ("scissors", "paper")} else "Gargand wins this round. 🌙"
     )
-    await ctx.send(embed=embed("✊ Rock, paper, scissors", f"You: {options[player]} **{player.title()}**\nNightfall: {options[bot_choice]} **{bot_choice.title()}**\n\n{result}", EMBED_COLOR))
+    await ctx.send(embed=embed("✊ Rock, paper, scissors", f"You: {options[player]} **{player.title()}**\nGargand: {options[bot_choice]} **{bot_choice.title()}**\n\n{result}", EMBED_COLOR))
 
 
 @bot.hybrid_command(name="avatar")
@@ -2326,7 +2341,7 @@ async def quote_command(ctx: commands.Context):
         "Small acts of trust make strong communities.",
         "The best server feature is the people in it.",
     )
-    await ctx.send(embed=embed("📜 A little Nightfall wisdom", f"“{random.choice(quotes)}”", INFO))
+    await ctx.send(embed=embed("📜 A little Gargand wisdom", f"“{random.choice(quotes)}”", INFO))
 
 
 @bot.hybrid_command(name="reverse")
@@ -2398,14 +2413,14 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
 
     status = await ctx.send(
         embed=embed(
-            "🌙 Nightfall is thinking…",
+            "🌙 Gargand is thinking…",
             "A little stardust is on the way.",
             INFO
         )
     )
 
     instructions = (
-        "You are Nightfall, a friendly Discord community assistant. "
+        "You are Gargand, a friendly Discord community assistant. "
         "Return ONLY the final answer to the user. "
         "Never reveal chain-of-thought, private reasoning, internal notes, "
         "analysis, or thinking process. "
@@ -2464,7 +2479,7 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
             await status.edit(
                 embed=embed(
                     "⚠️ No answer this time",
-                    "Nightfall couldn't read the AI response. Try again shortly.",
+                    "Gargand couldn't read the AI response. Try again shortly.",
                     WARNING
                 )
             )
@@ -2487,14 +2502,14 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
             await status.edit(
                 embed=embed(
                     "⚠️ No answer this time",
-                    "Nightfall couldn't read the AI response. Try again shortly.",
+                    "Gargand couldn't read the AI response. Try again shortly.",
                     WARNING
                 )
             )
             return
 
         e = embed(
-            "✨ Nightfall AI studio",
+            "✨ Gargand AI studio",
             result[:3800],
             EMBED_COLOR
         )
@@ -2509,7 +2524,7 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
         )
 
     except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
-        print(f"Nightfall text generation failed: {type(exc).__name__}")
+        print(f"Gargand text generation failed: {type(exc).__name__}")
 
         await status.edit(
             embed=embed(
@@ -2520,7 +2535,7 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
         )
 @bot.hybrid_command(name="ask")
 async def ai_ask(ctx: commands.Context, *, question: str):
-    """Ask Nightfall AI a general question."""
+    """Ask Gargand AI a general question."""
     await generate_ai_text(ctx, "Answer the question clearly and briefly. If uncertain, say so.", question, max_prompt=900)
 
 
@@ -2586,13 +2601,13 @@ async def ai_quiz(ctx: commands.Context, *, topic: str):
 async def aiimage_command(ctx: commands.Context, *, prompt: str):
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        await ctx.send(embed=embed("🌌 AI image is not connected yet", "The bot owner needs to add `OPENROUTER_API_KEY` to the KataBump environment variables and restart Nightfall. Image generations use the OPENROUTER API and may incur usage charges.", WARNING))
+        await ctx.send(embed=embed("🌌 AI image is not connected yet", "The bot owner needs to add `OPENROUTER_API_KEY` to the KataBump environment variables and restart Gargand. Image generations use the OPENROUTER API and may incur usage charges.", WARNING))
         return
     prompt = prompt.strip()
     if len(prompt) < 4 or len(prompt) > 700:
         await ctx.send("Give me an image description between 4 and 700 characters.")
         return
-    await ctx.send(embed=embed("🎨 Nightfall is creating your image", "This can take a little while. ✨", INFO))
+    await ctx.send(embed=embed("🎨 Gargand is creating your image", "This can take a little while. ✨", INFO))
     try:
         response = await asyncio.to_thread(
             requests.post,
@@ -2613,11 +2628,11 @@ async def aiimage_command(ctx: commands.Context, *, prompt: str):
         encoded = response.json()["data"][0]["b64_json"]
         image_bytes = base64.b64decode(encoded, validate=True)
         file = discord.File(io.BytesIO(image_bytes), filename="nightfall-ai.png")
-        e = embed("🌌 Made with Nightfall AI", f"**Prompt:** {prompt[:900]}", EMBED_COLOR)
+        e = embed("🌌 Made with Gargand AI", f"**Prompt:** {prompt[:900]}", EMBED_COLOR)
         await ctx.send(embed=e, file=file)
     except requests.RequestException as exc:
         # Network failures are transient; keep the bot running and avoid noisy logs.
-        print(f"Nightfall image service temporarily unavailable: {type(exc).__name__}")
+        print(f"Gargand image service temporarily unavailable: {type(exc).__name__}")
         await ctx.send(embed=embed("⏳ Image service unavailable", "The image service did not respond. Please try again in a moment.", WARNING))
     except (KeyError, IndexError, ValueError):
         await ctx.send(embed=embed("❌ Image generation failed", "The image service returned an invalid response. Please try again later.", WARNING))
@@ -2625,9 +2640,9 @@ async def aiimage_command(ctx: commands.Context, *, prompt: str):
 
 @bot.hybrid_command(name="ping")
 async def ping(ctx: commands.Context):
-    """Show Nightfall latency and online status."""
+    """Show Gargand latency and online status."""
     latency = round(bot.latency * 1000)
-    await ctx.send(embed=embed("🏓 Nightfall Pong!", f"**Latency:** `{latency} ms`\\n**Status:** Online ✨", SUCCESS))
+    await ctx.send(embed=embed("🏓 Gargand Pong!", f"**Latency:** `{latency} ms`\\n**Status:** Online ✨", SUCCESS))
 
 
 @bot.hybrid_command(name="membercount")
@@ -2843,7 +2858,7 @@ async def afk(ctx: commands.Context, *, reason: str = "AFK"):
     conn = db_connect()
     conn.execute("INSERT OR REPLACE INTO afk(guild_id,user_id,reason,set_at) VALUES(?,?,?,?)", (ctx.guild.id, ctx.author.id, reason, utc_ts()))
     conn.commit(); conn.close()
-    await ctx.send(embed=embed("💤 AFK enabled", f"{ctx.author.mention} is now AFK.\n**Reason:** {reason}\n\nWhen someone mentions you, Nightfall will protect the ping and let them know you're away.", INFO), delete_after=8)
+    await ctx.send(embed=embed("💤 AFK enabled", f"{ctx.author.mention} is now AFK.\n**Reason:** {reason}\n\nWhen someone mentions you, Gargand will protect the ping and let them know you're away.", INFO), delete_after=8)
 
 
 @bot.hybrid_command(name="jail")
@@ -2937,7 +2952,7 @@ async def setup(ctx: commands.Context):
             print(f"Jail setup refresh failed for {ctx.guild.id}: {exc!r}")
     # Reuse the existing dashboard when possible instead of creating duplicates.
     if await refresh_setup_dashboard(ctx.guild):
-        await ctx.send(embed=embed("✨ Setup refreshed", "Your existing Nightfall setup dashboard was refreshed with the latest saved settings.", SUCCESS), delete_after=5)
+        await ctx.send(embed=embed("✨ Setup refreshed", "Your existing Gargand setup dashboard was refreshed with the latest saved settings.", SUCCESS), delete_after=5)
         return
 
     # The saved dashboard may have been deleted. Clear stale IDs before creating
@@ -3171,7 +3186,7 @@ async def giveaway(ctx: commands.Context, duration: str = None, winners: int = N
     ends = utc_ts() + seconds
     e = embed("🎁 GIVEAWAY", f"## 🎉 {prize}\n\n⏳ Ends <t:{ends}:R>\n🏆 Winners: **{winners}**\n\nReact with 🎉 to enter!", EMBED_COLOR)
     if image_url: e.set_image(url=image_url)
-    e.set_footer(text="Nightfall Giveaway • Good luck! 🍀")
+    e.set_footer(text="Gargand Giveaway • Good luck! 🍀")
     msg = await ctx.send(embed=e)
     await msg.add_reaction("🎉")
     conn = db_connect(); conn.execute("INSERT INTO giveaways(guild_id,channel_id,message_id,prize,winners,ends_at,ended) VALUES(?,?,?,?,?,?,0)", (ctx.guild.id, ctx.channel.id, msg.id, prize, winners, ends)); conn.commit(); conn.close()
@@ -3451,7 +3466,7 @@ async def on_ready():
             await bot.tree.sync(guild=guild_ref)
         await bot.tree.sync()
     except Exception as exc:
-        print(f"Nightfall slash-command sync failed: {exc!r}")
+        print(f"Gargand slash-command sync failed: {exc!r}")
     global bridge_task
     db_init()
     for guild in bot.guilds:
@@ -3467,7 +3482,7 @@ async def on_ready():
                     member = guild.get_member(case["user_id"])
                     if member and jail_role not in member.roles:
                         try:
-                            await member.add_roles(jail_role, reason="Nightfall restore active jail")
+                            await member.add_roles(jail_role, reason="Gargand restore active jail")
                         except discord.HTTPException:
                             pass
             except (discord.Forbidden, discord.HTTPException) as exc:
@@ -3493,7 +3508,7 @@ async def on_guild_join(guild: discord.Guild):
     db_init()
     await cache_invites(guild)
     try:
-        await guild.me.edit(nick="Nightfall ✦")
+        await guild.me.edit(nick="Gargand ✦")
     except Exception:
         pass
 
@@ -3505,7 +3520,7 @@ async def on_guild_channel_create(channel: discord.abc.GuildChannel):
         try:
             ow = channel.overwrites_for(guild.default_role)
             ow.use_external_apps = False
-            await channel.set_permissions(guild.default_role, overwrite=ow, reason="Nightfall anti-raid new-channel protection")
+            await channel.set_permissions(guild.default_role, overwrite=ow, reason="Gargand anti-raid new-channel protection")
         except (discord.Forbidden, discord.HTTPException, AttributeError):
             pass
     if setting(guild, "jail_enabled", False):
@@ -3534,7 +3549,7 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str):
         audit = [entry async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.channel_delete if action_key == "channel_delete" else discord.AuditLogAction.role_delete)]
     except (discord.Forbidden, discord.HTTPException):
         await emergency_lockdown(guild)
-        await log_action(guild, "🚨 Anti-nuke lockdown", "Audit log access failed, so Nightfall applied a safer emergency lockdown.", DANGER)
+        await log_action(guild, "🚨 Anti-nuke lockdown", "Audit log access failed, so Gargand applied a safer emergency lockdown.", DANGER)
         return
     if not audit: return
     entry = audit[0]
@@ -3549,7 +3564,7 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str):
         member = guild.get_member(actor.id)
         if member and member.id != guild.owner_id:
             try:
-                await guild.ban(actor, reason=f"Nightfall anti-nuke: too many {action_key.replace('_',' ')} actions")
+                await guild.ban(actor, reason=f"Gargand anti-nuke: too many {action_key.replace('_',' ')} actions")
                 await log_action(guild, "🚨 Anti-nuke action", f"Banned {actor.mention} after repeated **{action_key.replace('_',' ')}** events.", DANGER)
             except discord.Forbidden:
                 await emergency_lockdown(guild)
@@ -3572,12 +3587,12 @@ async def on_member_join(member: discord.Member):
     if autorole_id:
         role = guild.get_role(autorole_id)
         if role:
-            try: await member.add_roles(role, reason="Nightfall auto role")
+            try: await member.add_roles(role, reason="Gargand auto role")
             except discord.Forbidden: pass
 
     if setting(guild, "verification_channel_id"):
         unverified, _ = await configure_verification_roles(guild)
-        try: await member.add_roles(unverified, reason="Nightfall verification")
+        try: await member.add_roles(unverified, reason="Gargand verification")
         except discord.Forbidden: pass
 
     welcome_id = setting(guild, "welcome_channel_id")
@@ -3641,7 +3656,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         if role_id:
             role = after.guild.get_role(role_id)
             if role:
-                try: await after.add_roles(role, reason="Nightfall booster role")
+                try: await after.add_roles(role, reason="Gargand booster role")
                 except discord.Forbidden: pass
         channel_id = setting(after.guild, "welcome_channel_id") or setting(after.guild, "logs_channel_id")
         channel = after.guild.get_channel(channel_id) if channel_id else None
@@ -3694,7 +3709,7 @@ async def on_message(message: discord.Message):
         if has_link and not is_gif:
             try:
                 await message.delete()
-                await message.author.timeout(timedelta(minutes=5), reason="Nightfall anti-link")
+                await message.author.timeout(timedelta(minutes=5), reason="Gargand anti-link")
                 await message.channel.send(embed=embed("🔗 Link blocked", f"{message.author.mention} was timed out for sending a link. GIFs are allowed.", WARNING), delete_after=5)
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -3706,7 +3721,7 @@ async def on_message(message: discord.Message):
         while q and now - q[0] > 30: q.popleft()
         if len(q) >= 3:
             try:
-                await guild.ban(message.author, reason="Nightfall anti-raid: repeated @everyone")
+                await guild.ban(message.author, reason="Gargand anti-raid: repeated @everyone")
                 await log_action(guild, "🚨 Anti-raid ban", f"Banned {message.author.mention} for repeated `@everyone` mentions.", DANGER)
                 return
             except discord.Forbidden:
@@ -3717,7 +3732,7 @@ async def on_message(message: discord.Message):
     if command_channel and message.content.startswith(active_prefix) and message.channel.id != command_channel and isinstance(message.author, discord.Member) and not is_staff(message.author):
         try:
             await message.delete()
-            await message.author.timeout(timedelta(minutes=1), reason="Nightfall: command outside command channel")
+            await message.author.timeout(timedelta(minutes=1), reason="Gargand: command outside command channel")
             ch = guild.get_channel(command_channel)
             await message.channel.send(embed=embed("⌨️ Commands channel only", f"{message.author.mention}, please use {ch.mention if ch else 'the configured command channel'}.", WARNING), delete_after=4)
         except (discord.Forbidden, discord.HTTPException): pass
@@ -3816,7 +3831,7 @@ async def build_guild_invite(guild):
     me = guild.me
     if not me:
         return ""
-    # Prefer a channel where Nightfall can create invites.
+    # Prefer a channel where Gargand can create invites.
     for channel in guild.text_channels:
         try:
             if not channel.permissions_for(me).create_instant_invite:
@@ -3825,7 +3840,7 @@ async def build_guild_invite(guild):
                 max_age=0,
                 max_uses=0,
                 unique=False,
-                reason="Nightfall website admin server invite",
+                reason="Gargand website admin server invite",
             )
             url = str(invite.url)
             GUILD_INVITE_CACHE[guild.id] = url
@@ -3849,7 +3864,7 @@ async def collect_guild_snapshot():
 def poll_nightfall_website():
     if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
         return []
-    headers = {"X-Nightfall-Bridge-Key": NIGHTFALL_BRIDGE_SECRET}
+    headers = {"X-Gargand-Bridge-Key": NIGHTFALL_BRIDGE_SECRET}
     # poll_nightfall_website runs in a worker thread, so build the async
     # snapshot before sending it to the website.
     guild_snapshot = asyncio.run_coroutine_threadsafe(
@@ -3928,7 +3943,7 @@ async def handle_website_job(job):
             if action == "post_ticket_panel":
                 channel = guild.get_channel(setting(guild, "ticket_panel_channel_id")) if setting(guild, "ticket_panel_channel_id") else None
                 if isinstance(channel, discord.TextChannel):
-                    await channel.send(embed=embed("🎫 Open a Nightfall ticket", "Choose a topic below and our team will be with you shortly."), view=TicketPanelView(guild.id))
+                    await channel.send(embed=embed("🎫 Open a Gargand ticket", "Choose a topic below and our team will be with you shortly."), view=TicketPanelView(guild.id))
             elif action == "post_verification_panel":
                 await post_verification_panel(guild)
             elif action == "post_feedback_panel":
@@ -3947,7 +3962,7 @@ async def handle_website_job(job):
 
 async def nightfall_website_bridge():
     if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
-        print("Nightfall website bridge is disabled; set NIGHTFALL_WEBSITE_URL and NIGHTFALL_BRIDGE_SECRET.")
+        print("Gargand website bridge is disabled; set NIGHTFALL_WEBSITE_URL and NIGHTFALL_BRIDGE_SECRET.")
         return
     while not bot.is_closed():
         try:
@@ -3961,12 +3976,12 @@ async def nightfall_website_bridge():
             if getattr(exc, "response", None) is not None and getattr(exc.response, "status_code", 0) in (502, 503, 504):
                 pass
             else:
-                print(f"Nightfall website bridge temporarily unavailable: {type(exc).__name__}")
+                print(f"Gargand website bridge temporarily unavailable: {type(exc).__name__}")
         except (asyncio.TimeoutError, TimeoutError):
             pass
         except Exception:
             import traceback
-            print("Nightfall website bridge poll failed; full traceback follows:")
+            print("Gargand website bridge poll failed; full traceback follows:")
             traceback.print_exc()
         await asyncio.sleep(BRIDGE_POLL_SECONDS)
 # -----------------------------
