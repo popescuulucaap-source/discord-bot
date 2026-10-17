@@ -2400,9 +2400,6 @@ def extract_response_text(data: dict) -> str:
     except (KeyError, IndexError, TypeError, AttributeError):
         return ""
 async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max_prompt: int = 700):
-    if not ctx.guild or not await is_premium_guild(ctx.guild.id):
-        await ctx.send(embed=embed("Premium required", "This server does not have an active Nightfall Premium entitlement. Activate Premium for this server on the Nightfall website.", WARNING))
-        return
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
 
     if not api_key:
@@ -2559,21 +2556,18 @@ async def generate_ai_text(ctx: commands.Context, task: str, prompt: str, *, max
                 WARNING
             )
         )
-@premium_only()
 @bot.hybrid_command(name="ask")
 async def ai_ask(ctx: commands.Context, *, question: str):
     """Ask Nightfall AI a general question."""
     await generate_ai_text(ctx, "Answer the question clearly and briefly. If uncertain, say so.", question, max_prompt=900)
 
 
-@premium_only()
 @bot.hybrid_command(name="story")
 async def ai_story(ctx: commands.Context, *, idea: str):
     """Create a short, original story from an idea."""
     await generate_ai_text(ctx, "Write a short, original, all-ages story with a satisfying ending.", idea, max_prompt=500)
 
 
-@premium_only()
 @bot.hybrid_command(name="roast")
 async def ai_roast(ctx: commands.Context, member: Optional[discord.Member] = None):
     """Give the caller or a member a gentle, playful roast."""
@@ -2581,7 +2575,6 @@ async def ai_roast(ctx: commands.Context, member: Optional[discord.Member] = Non
     await generate_ai_text(ctx, "Write one gentle, silly roast. Keep it affectionate and never target identity, appearance, disability, or sensitive traits.", f"Target display name: {target.display_name}")
 
 
-@premium_only()
 @bot.hybrid_command(name="compliment")
 async def ai_compliment(ctx: commands.Context, member: Optional[discord.Member] = None):
     """Generate a kind, upbeat compliment."""
@@ -2589,56 +2582,46 @@ async def ai_compliment(ctx: commands.Context, member: Optional[discord.Member] 
     await generate_ai_text(ctx, "Write a warm, specific-sounding but non-personal compliment. Do not invent private facts.", f"Display name: {target.display_name}")
 
 
-@premium_only()
 @bot.hybrid_command(name="riddle")
 async def ai_riddle(ctx: commands.Context):
     """Generate an original riddle and answer."""
     await generate_ai_text(ctx, "Create one original, solvable riddle. Give the riddle first, then put the answer on a separate line labelled Answer.", "Make it clever and suitable for a general audience.")
 
 
-@premium_only()
 @bot.hybrid_command(name="poem")
 async def ai_poem(ctx: commands.Context, *, topic: str = "the night sky"):
     """Write a short poem about a topic."""
     await generate_ai_text(ctx, "Write a short, original poem in 4 to 8 lines.", topic, max_prompt=400)
 
 
-@premium_only()
 @bot.hybrid_command(name="joke")
 async def ai_joke(ctx: commands.Context, *, topic: str = "anything"):
     """Generate a clean, short joke."""
     await generate_ai_text(ctx, "Tell one clean, short joke about the requested topic.", topic, max_prompt=350)
 
 
-@premium_only()
 @bot.hybrid_command(name="caption")
 async def ai_caption(ctx: commands.Context, *, idea: str):
     """Create a social caption for an idea or image description."""
     await generate_ai_text(ctx, "Write one short, catchy social media caption and up to three relevant hashtags.", idea, max_prompt=500)
 
 
-@premium_only()
 @bot.hybrid_command(name="namegen", aliases=["names"])
 async def ai_namegen(ctx: commands.Context, *, theme: str):
     """Generate a short list of names for a theme."""
     await generate_ai_text(ctx, "Suggest exactly 8 distinct names for the requested theme. Use a numbered list and keep each name short.", theme, max_prompt=300)
 
 
-@premium_only()
 @bot.hybrid_command(name="quiz")
 async def ai_quiz(ctx: commands.Context, *, topic: str):
     """Generate a quick question and answer for a quiz."""
     await generate_ai_text(ctx, "Create one multiple-choice trivia question on the topic with four options, mark the correct answer, and include a one-sentence explanation. If the topic is obscure, avoid uncertain claims.", topic, max_prompt=300)
 
 
-@premium_only()
 @bot.hybrid_command(name="aiimage", aliases=["aiart"])
 @commands.guild_only()
 @commands.cooldown(1, 90, commands.BucketType.user)
 async def aiimage_command(ctx: commands.Context, *, prompt: str):
-    if not ctx.guild or not await is_premium_guild(ctx.guild.id):
-        await ctx.send(embed=embed("Premium required", "AI image generation is a Premium feature. Activate Premium for this server on the Nightfall website.", WARNING))
-        return
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         await ctx.send(embed=embed("🌌 AI image is not connected yet", "The bot owner needs to add `OPENROUTER_API_KEY` to the KataBump environment variables and restart Nightfall. Image generations use the OPENROUTER API and may incur usage charges.", WARNING))
@@ -3022,14 +3005,12 @@ async def ticket(ctx: commands.Context):
 
 
 @ticket.command(name="panel")
-@premium_only()
 @admin_only()
 async def ticket_panel(ctx: commands.Context):
     await ctx.send(embed=embed("🎫 Open a ticket", "Select a ticket type below. Your ticket will be private and your staff role will be pinged.", EMBED_COLOR), view=TicketPanelView(ctx.guild.id))
 
 
 @ticket.command(name="questions")
-@premium_only()
 @admin_only()
 async def ticket_questions(ctx: commands.Context, ticket_type: str, *, questions: str):
     qs = [q.strip() for q in questions.split("|") if q.strip()][:5]
@@ -3042,7 +3023,6 @@ async def ticket_questions(ctx: commands.Context, ticket_type: str, *, questions
 
 # Appeal server command names support both spellings.
 @bot.hybrid_command(name="appeal_server", aliases=["apeal_server", "appealserver", "apealserver"])
-@premium_only()
 @admin_only()
 async def appeal_server(ctx: commands.Context):
     await ctx.send(embed=embed("📝 Appeal setup", "Choose the main server below. Only main servers that configured this guild as their appeal server appear here.", INFO), view=AppealServerView(ctx.guild))
@@ -3055,7 +3035,6 @@ async def appeal_group(ctx: commands.Context):
 
 
 @appeal_group.command(name="server")
-@premium_only()
 @admin_only()
 async def appeal_server_subcommand(ctx: commands.Context):
     await appeal_server(ctx)
@@ -3067,14 +3046,12 @@ async def apeal_group(ctx: commands.Context):
 
 
 @apeal_group.command(name="server")
-@premium_only()
 @admin_only()
 async def apeal_server_subcommand(ctx: commands.Context):
     await appeal_server(ctx)
 
 
 @bot.hybrid_command()
-@premium_only()
 @admin_only()
 async def autoreaction(ctx: commands.Context, channel: discord.TextChannel, emoji: str):
     # Validate emoji before saving. It can be unicode or a Discord custom emoji.
@@ -3088,14 +3065,12 @@ async def autoreaction(ctx: commands.Context, channel: discord.TextChannel, emoj
 
 
 @bot.hybrid_group(name="role", invoke_without_command=True)
-@premium_only()
 @admin_only()
 async def role_group(ctx: commands.Context):
     await ctx.send(embed=embed("🎭 Role manager", "Use `!role give @user @role` or `!role give @everyone @role`, or `!role make Name #8A5CFF`.", EMBED_COLOR))
 
 
 @role_group.command(name="give")
-@premium_only()
 @admin_only()
 async def role_give(ctx: commands.Context, target: str, role: discord.Role):
     if target.lower() in ("@everyone", "everyone"):
@@ -3120,7 +3095,6 @@ async def role_give(ctx: commands.Context, target: str, role: discord.Role):
 
 
 @role_group.command(name="make")
-@premium_only()
 @admin_only()
 async def role_make(ctx: commands.Context, name: str, color: str = "#ffffff"):
     color = color.replace("#", "")
@@ -3193,7 +3167,6 @@ async def inviter(ctx: commands.Context, member: discord.Member):
 
 
 @bot.hybrid_group(name="j4j", invoke_without_command=True)
-@premium_only()
 @admin_only()
 async def j4j_group(ctx: commands.Context):
     cfg = get_settings(ctx.guild.id)
