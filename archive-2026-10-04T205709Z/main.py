@@ -47,8 +47,6 @@ NIGHTFALL_BRIDGE_SECRET = os.getenv("NIGHTFALL_BRIDGE_SECRET", "").strip()
 BRIDGE_POLL_SECONDS = 10
 bridge_task = None
 
-PREMIUM_GUILD_CACHE: dict[int, tuple[bool, float, float]] = {}
-PREMIUM_CACHE_SECONDS = 60.0
 
 async def send_telemetry(event_type: str, guild=None, user=None, command_name: str = "", metadata=None):
     if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
@@ -343,42 +341,6 @@ def is_staff(member: discord.Member) -> bool:
         return True
     role_id = setting(member.guild, "staff_role_id")
     return bool(role_id and any(r.id == role_id for r in member.roles))
-
-
-async def is_premium_guild(guild_id: int) -> bool:
-    now = time.time()
-    cached = PREMIUM_GUILD_CACHE.get(int(guild_id))
-    if cached and now - cached[2] < PREMIUM_CACHE_SECONDS:
-        active, expires_at, _ = cached
-        return active and (not expires_at or expires_at > now)
-    if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
-        return False
-    def fetch():
-        try:
-            response = requests.get(
-                f"{NIGHTFALL_WEBSITE_URL}/api/bot/premium-guild/{int(guild_id)}",
-                headers={"X-Nightfall-Bridge-Key": NIGHTFALL_BRIDGE_SECRET},
-                timeout=8,
-            )
-            if response.status_code != 200:
-                return False, 0.0
-            data = response.json()
-            return bool(data.get("premium")), float(data.get("expires_at") or 0)
-        except (requests.RequestException, ValueError, TypeError):
-            return False, 0.0
-    active, expires_at = await asyncio.to_thread(fetch)
-    PREMIUM_GUILD_CACHE[int(guild_id)] = (active, expires_at, now)
-    return active and (not expires_at or expires_at > now)
-
-
-def premium_only():
-    async def predicate(ctx: commands.Context):
-        if not ctx.guild:
-            raise commands.CheckFailure("Premium features are only available inside a Discord server.")
-        if not await is_premium_guild(ctx.guild.id):
-            raise commands.CheckFailure("This server needs an active Nightfall Premium entitlement.")
-        return True
-    return commands.check(predicate)
 
 
 def staff_only():
