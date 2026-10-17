@@ -42,8 +42,8 @@ if not TOKEN:
     raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Katabump environment variables.")
 
 PREFIX = "!"
-NIGHTFALL_WEBSITE_URL = os.getenv("NIGHTFALL_WEBSITE_URL", "").strip().rstrip("/")
-NIGHTFALL_BRIDGE_SECRET = os.getenv("NIGHTFALL_BRIDGE_SECRET", "").strip()
+NIGHTFALL_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "").strip().rstrip("/")
+NIGHTFALL_BRIDGE_SECRET = (os.getenv("GARGAND_BRIDGE_SECRET") or os.getenv("NIGHTFALL_BRIDGE_SECRET") or "").strip()
 BRIDGE_POLL_SECONDS = 10
 bridge_task = None
 
@@ -101,11 +101,11 @@ def make_bot_invite() -> str:
     return f"https://discord.com/oauth2/authorize?client_id={client_id}&scope=bot&permissions={perms.value}"
 
 
-EMBED_COLOR = discord.Color.from_rgb(35, 235, 100)
-SUCCESS = discord.Color.from_rgb(46, 204, 113)
+EMBED_COLOR = discord.Color.from_rgb(255, 197, 35)
+SUCCESS = discord.Color.from_rgb(255, 213, 79)
 WARNING = discord.Color.from_rgb(241, 196, 15)
 DANGER = discord.Color.from_rgb(231, 76, 60)
-INFO = discord.Color.from_rgb(35, 235, 100)
+INFO = discord.Color.from_rgb(255, 197, 35)
 DARK = discord.Color.from_rgb(44, 47, 51)
 
 INTENTS = discord.Intents.default()
@@ -302,9 +302,10 @@ def utc_ts() -> int:
 
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
-    branded_description = f"🟢 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟢\\n{description}"
+    branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\\n{description}"
     e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
+    e.set_thumbnail(url="https://www.svgrepo.com/show/17505/lion-head.svg")
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
