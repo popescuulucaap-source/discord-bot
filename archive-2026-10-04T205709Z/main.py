@@ -302,7 +302,8 @@ def utc_ts() -> int:
 
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
-    e = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
+    branded_description = f"🟢 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟢\\n{description}"
+    e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
