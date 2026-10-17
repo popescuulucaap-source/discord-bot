@@ -225,7 +225,7 @@ def db_init():
             original_roles TEXT NOT NULL DEFAULT '[]'
         );
         CREATE INDEX IF NOT EXISTS idx_jails_active ON jails(guild_id, user_id, active);
-        CREATE TABLE IF NOT EXISTS premium_guilds (guild_id INTEGER PRIMARY KEY, discord_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'purchase', expires_at DOUBLE PRECISION NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);\n\n        CREATE TABLE IF NOT EXISTS speech_counts (
+CREATE TABLE IF NOT EXISTS speech_counts (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             metric TEXT NOT NULL,
@@ -3875,148 +3875,6 @@ def poll_nightfall_website():
     return data.get("jobs", []) if data.get("ok") else []
 
 
-async def execute_vault_command(guild, website_discord_id, command_name, args):
-    """Execute an existing Nightfall command with the website user's real guild Member."""
-    member = guild.get_member(int(website_discord_id)) if str(website_discord_id).isdigit() else None
-    if not isinstance(member, discord.Member):
-        return False, "The linked Discord account is not a member of this server."
-
-    lookup_name = {
-        "ticket_panel": "ticket panel",
-        "ticket_questions": "ticket questions",
-        "role_give": "role give",
-        "role_make": "role make",
-        "reset_invites": "reset invites",
-    }.get(command_name, command_name)
-    command = bot.get_command(lookup_name)
-    if command is None:
-        return False, "That Nightfall command is not available."
-
-    admin_commands = {"clearwarnings", "setup", "ticket_questions", "role_make", "reset_invites"}
-    staff_commands = {
-        "ban", "kick", "warn", "purge", "warnings", "announce", "timeout",
-        "lock", "unlock", "slowmode", "jail", "unjail", "ticket_panel",
-        "appeal_server", "appeal_group", "autoreaction", "role_give"
-    }
-    if command_name in admin_commands and not is_admin(member):
-        return False, "Administrator permission is required for this command."
-    if command_name in staff_commands and not is_staff(member):
-        return False, "Staff permission is required for this command."
-
-    raw_args = args if isinstance(args, dict) else {}
-    channel_id = raw_args.get("channel_id")
-    channel = guild.get_channel(int(channel_id)) if str(channel_id or "").isdigit() else guild.system_channel
-    if not isinstance(channel, discord.TextChannel):
-        channel = next((x for x in guild.text_channels if guild.me and x.permissions_for(guild.me).send_messages), None)
-    if not channel:
-        return False, "I could not find a text channel where I can send the result."
-
-    class VaultMessage:
-        def __init__(self):
-            self.author = member
-            self.guild = guild
-            self.channel = channel
-            self.content = ""
-            self.id = 0
-
-    ctx = commands.Context(
-        message=VaultMessage(),
-        bot=bot,
-        view=None,
-        prefix=PREFIX,
-        command=command,
-        invoked_with=command_name,
-    )
-
-    def member_arg(key):
-        value = raw_args.get(key)
-        return guild.get_member(int(value)) if str(value or "").isdigit() else None
-
-    def role_arg(key):
-        value = raw_args.get(key)
-        return guild.get_role(int(value)) if str(value or "").isdigit() else None
-
-    def channel_arg(key):
-        value = raw_args.get(key)
-        obj = guild.get_channel(int(value)) if str(value or "").isdigit() else None
-        return obj if isinstance(obj, discord.TextChannel) else None
-
-    try:
-        if command_name in {"ban", "kick", "warn", "warnings", "clearwarnings", "timeout", "jail", "unjail"}:
-            target = member_arg("member_id")
-            if not target:
-                return False, "Choose a valid member ID."
-            reason = str(raw_args.get("reason") or "Vault action")
-            if command_name in {"ban", "kick", "warn"}:
-                await command.callback(ctx, target, reason=reason)
-            elif command_name in {"warnings", "clearwarnings"}:
-                await command.callback(ctx, target)
-            elif command_name == "timeout":
-                await command.callback(ctx, target, str(raw_args.get("duration") or "5m"), reason=reason)
-            else:
-                await command.callback(ctx, target, reason=reason)
-        elif command_name == "purge":
-            await command.callback(ctx, int(raw_args.get("amount", 10)))
-        elif command_name == "announce":
-            target_channel = channel_arg("target_channel_id")
-            if not target_channel:
-                return False, "Choose a valid target channel."
-            await command.callback(ctx, target_channel, message=str(raw_args.get("message") or "")[:4000])
-        elif command_name == "poll":
-            await command.callback(ctx, prompt=str(raw_args.get("prompt") or ""))
-        elif command_name == "slowmode":
-            await command.callback(ctx, int(raw_args.get("seconds", 0)))
-        elif command_name == "autoreaction":
-            target_channel = channel_arg("target_channel_id")
-            if not target_channel:
-                return False, "Choose a valid target channel."
-            await command.callback(ctx, target_channel, str(raw_args.get("emoji") or ""))
-        elif command_name == "role_give":
-            target, role = member_arg("member_id"), role_arg("role_id")
-            if not target or not role:
-                return False, "Choose a valid member and role."
-            await command.callback(ctx, str(raw_args.get("target") or target.id), role)
-        elif command_name == "role_make":
-            await command.callback(ctx, str(raw_args.get("name") or "Nightfall Role"), str(raw_args.get("color") or "#ffffff"))
-        elif command_name == "reset_invites":
-            await command.callback(ctx, str(raw_args.get("target") or "clean"))
-        elif command_name == "ticket_questions":
-            await command.callback(ctx, str(raw_args.get("ticket_type") or "support"), questions=str(raw_args.get("questions") or ""))
-        elif command_name in {"ticket", "ticket_panel", "appeal_server", "appeal_group", "setup", "ping", "membercount", "riddle"}:
-            await command.callback(ctx)
-        elif command_name == "inviter":
-            target = member_arg("member_id")
-            if not target:
-                return False, "Choose a valid member."
-            await command.callback(ctx, target)
-        elif command_name == "roleinfo":
-            role = role_arg("role_id")
-            if not role:
-                return False, "Choose a valid role."
-            await command.callback(ctx, role)
-        elif command_name == "channelinfo":
-            await command.callback(ctx, channel_arg("channel_id") or channel)
-        elif command_name in {"ask", "story", "poem", "joke", "caption", "namegen", "quiz"}:
-            key = {"ai_ask":"question","ai_story":"idea","ai_poem":"topic","ai_joke":"topic","ai_caption":"idea","ai_namegen":"theme","ai_quiz":"topic"}[command_name]
-            await command.callback(ctx, str(raw_args.get(key) or ""))
-        elif command_name in {"roast", "compliment"}:
-            await command.callback(ctx, member_arg("member_id"))
-        elif command_name == "aiimage":
-            await command.callback(ctx, prompt=str(raw_args.get("prompt") or ""))
-        elif command_name == "afk":
-            await command.callback(ctx, reason=str(raw_args.get("reason") or "AFK"))
-        elif command_name in {"lock", "unlock"}:
-            await command.callback(ctx)
-        elif command_name in {"invites", "invited"}:
-            target = member_arg("member_id")
-            await command.callback(ctx, target)
-        else:
-            return False, "This command needs a dedicated Vault form."
-    except (discord.Forbidden, discord.HTTPException, ValueError, TypeError) as exc:
-        return False, f"Discord rejected the command: {type(exc).__name__}."
-    return True, "Command sent to the selected server."
-
-
 async def handle_website_job(job):
     try:
         guild_id = int(job.get("guild_id", 0))
@@ -4058,17 +3916,6 @@ async def handle_website_job(job):
             conn.close()
         save_settings(guild_id, current)
         await refresh_setup_dashboard(guild)
-        return
-
-    if job.get("kind") == "vault_command":
-        ok, message = await execute_vault_command(
-            guild,
-            str(payload.get("discord_id") or ""),
-            str(payload.get("command") or "").strip().lower(),
-            payload.get("args") if isinstance(payload.get("args"), dict) else {},
-        )
-        if not ok:
-            print(f"Vault command {payload.get('command')!r} failed in guild {guild_id}: {message}")
         return
 
     if job.get("kind") == "action" and payload.get("action") == "sync_setup":
