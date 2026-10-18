@@ -42,14 +42,14 @@ if not TOKEN:
     raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Fadehost environment variables.")
 
 PREFIX = "!"
-NIGHTFALL_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "https://testiny-7wuu.onrender.com").strip().rstrip("/")
-NIGHTFALL_BRIDGE_SECRET = (os.getenv("GARGAND_BRIDGE_SECRET") or os.getenv("NIGHTFALL_BRIDGE_SECRET") or "").strip()
+GARGAND_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("GARGAND_WEBSITE_URL") or "https://testiny-7wuu.onrender.com").strip().rstrip("/")
+GARGAND_BRIDGE_SECRET = (os.getenv("GARGAND_BRIDGE_SECRET") or os.getenv("GARGAND_BRIDGE_SECRET") or "").strip()
 BRIDGE_POLL_SECONDS = 10
 bridge_task = None
 
 
 async def send_telemetry(event_type: str, guild=None, user=None, command_name: str = "", metadata=None):
-    if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
+    if not GARGAND_WEBSITE_URL or not GARGAND_BRIDGE_SECRET:
         return
     payload = {
         "events": [{
@@ -65,8 +65,8 @@ async def send_telemetry(event_type: str, guild=None, user=None, command_name: s
     def post():
         try:
             requests.post(
-                f"{NIGHTFALL_WEBSITE_URL}/api/bot/events",
-                headers={"X-Gargand-Bridge-Key": NIGHTFALL_BRIDGE_SECRET},
+                f"{GARGAND_WEBSITE_URL}/api/bot/events",
+                headers={"X-Gargand-Bridge-Key": GARGAND_BRIDGE_SECRET},
                 json=payload,
                 timeout=8,
             )
@@ -307,8 +307,8 @@ def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> d
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     # Prefer the official GARGAND lion hosted by the website, with a safe fallback.
     pfp_url = (os.getenv("GARGAND_PFP_URL") or "").strip()
-    if not pfp_url and NIGHTFALL_WEBSITE_URL:
-        pfp_url = f"{NIGHTFALL_WEBSITE_URL}/gargand-lion.jpg"
+    if not pfp_url and GARGAND_WEBSITE_URL:
+        pfp_url = f"{GARGAND_WEBSITE_URL}/gargand-lion.jpg"
     e.set_thumbnail(url=pfp_url or "https://www.svgrepo.com/show/17505/lion-head.svg")
     # Discord embeds support an animated image here; keep the gold divider consistent.
     e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://testiny-7wuu.onrender.com/gargand-bar.gif"))
@@ -3866,7 +3866,7 @@ async def on_ready():
         giveaway_watcher.start()
     if not nightfall_presence.is_running():
         nightfall_presence.start()
-    if NIGHTFALL_WEBSITE_URL and NIGHTFALL_BRIDGE_SECRET and (bridge_task is None or bridge_task.done()):
+    if GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET and (bridge_task is None or bridge_task.done()):
         bridge_task = asyncio.create_task(nightfall_website_bridge(), name="nightfall-website-bridge")
     print(f"Logged in as {bot.user} ({bot.user.id}) on {len(bot.guilds)} server(s)")
 
@@ -4231,9 +4231,9 @@ async def collect_guild_snapshot():
     return snapshot
 
 def poll_nightfall_website():
-    if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
+    if not GARGAND_WEBSITE_URL or not GARGAND_BRIDGE_SECRET:
         return []
-    headers = {"X-Gargand-Bridge-Key": NIGHTFALL_BRIDGE_SECRET}
+    headers = {"X-Gargand-Bridge-Key": GARGAND_BRIDGE_SECRET}
     # poll_nightfall_website runs in a worker thread, so build the async
     # snapshot before sending it to the website.
     guild_snapshot = asyncio.run_coroutine_threadsafe(
@@ -4243,14 +4243,14 @@ def poll_nightfall_website():
         "guilds": guild_snapshot
     }
     response = requests.post(
-        f"{NIGHTFALL_WEBSITE_URL}/api/bot/heartbeat",
+        f"{GARGAND_WEBSITE_URL}/api/bot/heartbeat",
         headers=headers,
         json=heartbeat,
         timeout=12,
     )
     response.raise_for_status()
     response = requests.get(
-        f"{NIGHTFALL_WEBSITE_URL}/api/bot/pull",
+        f"{GARGAND_WEBSITE_URL}/api/bot/pull",
         headers=headers,
         timeout=12,
     )
@@ -4330,8 +4330,8 @@ async def handle_website_job(job):
 
 
 async def nightfall_website_bridge():
-    if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
-        print("GARGAND website bridge is disabled; set GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET (legacy NIGHTFALL_* names are also accepted).")
+    if not GARGAND_WEBSITE_URL or not GARGAND_BRIDGE_SECRET:
+        print("GARGAND website bridge is disabled; set GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET (legacy GARGAND_* names are also accepted).")
         return
     while not bot.is_closed():
         try:
