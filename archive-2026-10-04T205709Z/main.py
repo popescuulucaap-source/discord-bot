@@ -3311,21 +3311,34 @@ class ServerTemplateView(discord.ui.View):
         self.add_item(ServerTemplateSelect(guild_id))
 
 
-@setup.command(name="templates", aliases=["template"])
-@admin_only()
-async def setup_templates(ctx: commands.Context):
+async def send_server_template_menu(ctx: commands.Context):
     if not ctx.guild:
+        await ctx.send(embed=embed("GARGAND • Server Templates", "Run this command inside a Discord server.", WARNING))
         return
     await ctx.send(
         embed=embed(
             "👑 GARGAND • Server Templates",
             "Choose a starter layout below. GARGAND will add a category, channels, starter rules and useful roles without deleting existing server content.\n\n"
             "Templates: **Community**, **Gaming**, **Creator**, and **Support**.\n"
-            "GARGAND needs Manage Channels and Manage Roles to apply the layout.",
+            "GARGAND needs **Manage Channels** and **Manage Roles** to apply the layout.",
             INFO,
         ),
         view=ServerTemplateView(ctx.guild.id),
     )
+
+
+@setup.command(name="template")
+@admin_only()
+async def setup_template(ctx: commands.Context):
+    """Open the server template picker using the exact !setup template spelling."""
+    await send_server_template_menu(ctx)
+
+
+@setup.command(name="templates")
+@admin_only()
+async def setup_templates(ctx: commands.Context):
+    """Plural alias for backwards compatibility."""
+    await send_server_template_menu(ctx)
 
 
 @bot.hybrid_group(name="ticket", invoke_without_command=True)
