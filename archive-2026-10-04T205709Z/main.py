@@ -305,8 +305,13 @@ def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> d
     branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\n{description}"
     e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
-    e.set_thumbnail(url="https://www.svgrepo.com/show/17505/lion-head.svg")
-    e.set_image(url="https://www.gifs.cc/line4.gif")
+    # Prefer the official GARGAND lion hosted by the website, with a safe fallback.
+    pfp_url = (os.getenv("GARGAND_PFP_URL") or "").strip()
+    if not pfp_url and NIGHTFALL_WEBSITE_URL:
+        pfp_url = f"{NIGHTFALL_WEBSITE_URL}/gargand-lion.jpg"
+    e.set_thumbnail(url=pfp_url or "https://www.svgrepo.com/show/17505/lion-head.svg")
+    # Discord embeds support an animated image here; keep the gold divider consistent.
+    e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://www.gifs.cc/line4.gif"))
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
@@ -3042,6 +3047,272 @@ async def setup(ctx: commands.Context):
         await msg.edit(embed=setup_dashboard_embed(ctx.guild), view=SetupDashboardView(ctx.guild.id))
     except discord.HTTPException:
         pass
+
+
+# -----------------------------
+# Server starter templates
+# -----------------------------
+
+SERVER_TEMPLATE_DATA = {
+    "community": {
+        "label": "Community",
+        "description": "A friendly all-purpose community with rules, announcements, support, and staff tools.",
+        "category": "GARGAND • COMMUNITY",
+        "roles": [("Administrator", 0xE0AA25), ("Staff", 0xEBCB69), ("Member", 0xA8A8A8), ("Muted", 0x555555)],
+        "channels": [
+            ("start-here", "text", False, "Welcome and next steps"),
+            ("rules", "text", False, "Community rules and expectations"),
+            ("announcements", "text", False, "Official community updates"),
+            ("general", "text", False, "Main community conversation"),
+            ("media", "text", False, "Share images, clips and creations"),
+            ("suggestions", "text", False, "Ideas and community feedback"),
+            ("support", "text", False, "Questions and help"),
+            ("staff-chat", "text", True, "Private staff coordination"),
+            ("mod-logs", "text", True, "Private moderation logs"),
+            ("Community Lounge", "voice", False, "Community voice hangout"),
+        ],
+    },
+    "gaming": {
+        "label": "Gaming",
+        "description": "Gaming community channels, team roles, LFG, clips, and private moderation rooms.",
+        "category": "GARGAND • GAMING",
+        "roles": [("Administrator", 0xE0AA25), ("Staff", 0xEBCB69), ("Tournament Host", 0xE68A25), ("Gamer", 0xC7A84A), ("Muted", 0x555555)],
+        "channels": [
+            ("start-here", "text", False, "Welcome and server information"),
+            ("rules", "text", False, "Gaming and community rules"),
+            ("announcements", "text", False, "Game and event announcements"),
+            ("general", "text", False, "General gaming chat"),
+            ("looking-for-group", "text", False, "Find teammates"),
+            ("clips-and-highlights", "text", False, "Share gameplay clips"),
+            ("tournaments", "text", False, "Tournament news and sign-ups"),
+            ("bot-commands", "text", False, "Use bot commands here"),
+            ("staff-chat", "text", True, "Private staff coordination"),
+            ("mod-logs", "text", True, "Private moderation logs"),
+            ("Gaming Lounge", "voice", False, "Play together"),
+        ],
+    },
+    "creator": {
+        "label": "Creator",
+        "description": "For streamers and creators: announcements, content drops, suggestions, and fan chat.",
+        "category": "GARGAND • CREATOR",
+        "roles": [("Administrator", 0xE0AA25), ("Staff", 0xEBCB69), ("Creator", 0xE68A25), ("Community", 0xA8A8A8), ("Muted", 0x555555)],
+        "channels": [
+            ("start-here", "text", False, "Welcome fans and new members"),
+            ("rules", "text", False, "Creator-community rules"),
+            ("announcements", "text", False, "Important news and schedules"),
+            ("new-content", "text", False, "New videos, streams and uploads"),
+            ("community-chat", "text", False, "Chat with the community"),
+            ("fan-creations", "text", False, "Artwork, edits and fan projects"),
+            ("suggestions", "text", False, "Content ideas and feedback"),
+            ("collaborations", "text", False, "Plan creator collaborations"),
+            ("staff-chat", "text", True, "Private staff coordination"),
+            ("mod-logs", "text", True, "Private moderation logs"),
+            ("Watch Party", "voice", False, "Hang out with the community"),
+        ],
+    },
+    "support": {
+        "label": "Support",
+        "description": "A support-focused server with FAQ, help queues, announcements, and private staff areas.",
+        "category": "GARGAND • SUPPORT",
+        "roles": [("Administrator", 0xE0AA25), ("Support Team", 0xEBCB69), ("Helper", 0xC7A84A), ("Member", 0xA8A8A8), ("Muted", 0x555555)],
+        "channels": [
+            ("start-here", "text", False, "How to get support"),
+            ("rules", "text", False, "Support and conduct rules"),
+            ("announcements", "text", False, "Service status and updates"),
+            ("faq", "text", False, "Frequently asked questions"),
+            ("open-a-ticket", "text", False, "Open a private support ticket"),
+            ("community-chat", "text", False, "General questions and chat"),
+            ("resolved-issues", "text", False, "Useful answers and solved cases"),
+            ("staff-chat", "text", True, "Private support coordination"),
+            ("support-logs", "text", True, "Private support audit logs"),
+            ("Staff Voice", "voice", True, "Private staff voice room"),
+        ],
+    },
+}
+
+SERVER_TEMPLATE_RULES = [
+    "Be respectful. Harassment, hate speech, and targeted abuse are not allowed.",
+    "No spam, raids, scams, phishing, or malicious links.",
+    "Do not share private information or impersonate other members.",
+    "Post in the right channels and follow each channel's topic.",
+    "No advertising or unsolicited promotions unless staff permit them.",
+    "Follow Discord's Terms of Service and Community Guidelines.",
+    "Listen to staff instructions. Use the support or appeal process if you disagree.",
+]
+
+
+async def apply_server_template(guild: discord.Guild, template_key: str) -> dict:
+    """Add a starter layout without deleting or renaming any existing server content."""
+    template = SERVER_TEMPLATE_DATA[template_key]
+    created = {"categories": 0, "channels": 0, "roles": 0}
+    role_objects = {}
+    for role_name, hex_colour in template["roles"]:
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role is None:
+            try:
+                role = await guild.create_role(
+                    name=role_name,
+                    colour=discord.Colour(hex_colour),
+                    reason="GARGAND server template: " + template_key,
+                )
+                created["roles"] += 1
+            except discord.Forbidden as exc:
+                raise RuntimeError("GARGAND needs Manage Roles permission to create template roles.") from exc
+        role_objects[role_name] = role
+
+    category = discord.utils.get(guild.categories, name=template["category"])
+    if category is None:
+        try:
+            category = await guild.create_category(
+                name=template["category"],
+                reason="GARGAND server template: " + template_key,
+            )
+            created["categories"] += 1
+        except discord.Forbidden as exc:
+            raise RuntimeError("GARGAND needs Manage Channels permission to create template categories.") from exc
+
+    staff_role = role_objects.get("Staff") or role_objects.get("Support Team") or role_objects.get("Administrator")
+    everyone_hidden = discord.PermissionOverwrite(view_channel=False)
+    staff_allowed = discord.PermissionOverwrite(
+        view_channel=True, send_messages=True, read_message_history=True,
+        connect=True, speak=True,
+    )
+    bot_member = guild.me
+    for channel_name, channel_type, private, topic in template["channels"]:
+        exists = next(
+            (ch for ch in category.channels if ch.name.casefold() == channel_name.casefold()
+             and ((channel_type == "text" and isinstance(ch, discord.TextChannel))
+                  or (channel_type == "voice" and isinstance(ch, discord.VoiceChannel)))),
+            None,
+        )
+        if exists is not None:
+            continue
+        overwrites = None
+        if private:
+            overwrites = {guild.default_role: everyone_hidden}
+            for role in role_objects.values():
+                if role.name in ("Administrator", "Staff", "Support Team", "Helper"):
+                    overwrites[role] = staff_allowed
+            if bot_member:
+                overwrites[bot_member] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True,
+                    manage_channels=True, manage_messages=True, connect=True, speak=True,
+                )
+        try:
+            if channel_type == "voice":
+                await guild.create_voice_channel(
+                    name=channel_name, category=category, overwrites=overwrites,
+                    reason="GARGAND server template: " + template_key,
+                )
+            else:
+                await guild.create_text_channel(
+                    name=channel_name, category=category, topic=topic[:1024],
+                    overwrites=overwrites, reason="GARGAND server template: " + template_key,
+                )
+            created["channels"] += 1
+        except discord.Forbidden as exc:
+            raise RuntimeError("GARGAND needs Manage Channels permission to finish this template.") from exc
+
+    rules_channel = next(
+        (ch for ch in category.text_channels if ch.name == "rules"), None
+    )
+    if rules_channel is not None:
+        marker = "gargand-template-rules:" + template_key
+        if not (rules_channel.topic or "").startswith(marker):
+            try:
+                await rules_channel.edit(topic=marker + " • Starter community rules")
+            except discord.HTTPException:
+                pass
+            rules_text = "\n".join("**%s.** %s" % (idx, rule) for idx, rule in enumerate(SERVER_TEMPLATE_RULES, 1))
+            rules_embed = embed(
+                "📜 " + template["label"] + " • Server Rules",
+                "Welcome! Please read and follow these rules so everyone can enjoy the server.\n\n" + rules_text,
+                INFO,
+            )
+            await rules_channel.send(embed=rules_embed)
+
+    welcome_channel = next(
+        (ch for ch in category.text_channels if ch.name == "start-here"), None
+    )
+    if welcome_channel is not None:
+        topic_marker = "gargand-template-welcome:" + template_key
+        if not (welcome_channel.topic or "").startswith(topic_marker):
+            try:
+                await welcome_channel.edit(topic=topic_marker + " • Welcome new members")
+            except discord.HTTPException:
+                pass
+            await welcome_channel.send(embed=embed(
+                "👑 Welcome to " + guild.name,
+                "Welcome to the server! Start by reading #rules, checking #announcements, and introducing yourself in the community channels.",
+                SUCCESS,
+            ))
+    return created
+
+
+class ServerTemplateSelect(discord.ui.Select):
+    def __init__(self, guild_id: int):
+        self.guild_id = guild_id
+        options = [
+            discord.SelectOption(
+                label=data["label"], value=key, description=data["description"][:100],
+                emoji="👑" if key == "community" else "🎮" if key == "gaming" else "🎥" if key == "creator" else "🎫",
+            )
+            for key, data in SERVER_TEMPLATE_DATA.items()
+        ]
+        super().__init__(
+            placeholder="Choose a GARGAND server template…",
+            min_values=1, max_values=1, options=options,
+            custom_id="gargand:setup:template",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.guild or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message("This template selector belongs to another server.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member) or not (
+            interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
+        ):
+            await interaction.response.send_message("Only server administrators or members with Manage Server can apply templates.", ephemeral=True)
+            return
+        template_key = self.values[0]
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            result = await apply_server_template(interaction.guild, template_key)
+            data = SERVER_TEMPLATE_DATA[template_key]
+            summary = (
+                "**Template:** " + data["label"] + "\n"
+                "**Added:** " + str(result["categories"]) + " category/categories, "
+                + str(result["channels"]) + " channel(s), and " + str(result["roles"]) + " role(s).\n\n"
+                "Existing channels and roles were preserved. Review role permissions and adjust the rules before opening the server."
+            )
+            await interaction.followup.send(embed=embed("✅ GARGAND template applied", summary, SUCCESS), ephemeral=True)
+        except RuntimeError as exc:
+            await interaction.followup.send(embed=embed("⚠️ Template needs permissions", str(exc), WARNING), ephemeral=True)
+        except discord.HTTPException as exc:
+            await interaction.followup.send(embed=embed("⚠️ Template could not finish", "Discord rejected part of the setup. Check GARGAND's role permissions, then run the template again; existing content will not be deleted.", WARNING), ephemeral=True)
+
+
+class ServerTemplateView(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=180)
+        self.add_item(ServerTemplateSelect(guild_id))
+
+
+@setup.command(name="templates", aliases=["template"])
+@admin_only()
+async def setup_templates(ctx: commands.Context):
+    if not ctx.guild:
+        return
+    await ctx.send(
+        embed=embed(
+            "👑 GARGAND • Server Templates",
+            "Choose a starter layout below. GARGAND will add a category, channels, starter rules and useful roles without deleting existing server content.\n\n"
+            "Templates: **Community**, **Gaming**, **Creator**, and **Support**.\n"
+            "GARGAND needs Manage Channels and Manage Roles to apply the layout.",
+            INFO,
+        ),
+        view=ServerTemplateView(ctx.guild.id),
+    )
 
 
 @bot.hybrid_group(name="ticket", invoke_without_command=True)
