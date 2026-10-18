@@ -635,7 +635,7 @@ def make_challenge_image(phrase: str) -> discord.File:
         small = ImageFont.truetype("DejaVuSans.ttf", 22)
     except Exception:
         font = ImageFont.load_default(); small = ImageFont.load_default()
-    draw.text((42, 38), "NIGHTFALL VERIFICATION", font=small, fill=(180, 175, 215))
+    draw.text((42, 38), "GARGAND VERIFICATION", font=small, fill=(180, 175, 215))
     bbox = draw.textbbox((0, 0), phrase, font=font)
     tw = bbox[2] - bbox[0]
     draw.text(((900 - tw) / 2, 115), phrase, font=font, fill=(246, 244, 255))
@@ -2237,7 +2237,7 @@ async def about_command(ctx: commands.Context):
         "smart server safety, tickets, invites, giveaways, games, and creative tools.\n\n"
         "Set up your server with `!setup`, then let the night run smoother. ✨"
     )
-    e = embed("🌌 NIGHTFALL • 1.0v LAUNCH", description, EMBED_COLOR)
+    e = embed("👑 GARGAND • 1.0v LAUNCH", description, EMBED_COLOR)
     if bot.user:
         e.set_thumbnail(url=bot.user.display_avatar.url)
     await ctx.send(embed=e)
@@ -2422,7 +2422,7 @@ async def quote_command(ctx: commands.Context):
 @bot.hybrid_command(name="reverse")
 async def reverse_command(ctx: commands.Context, *, text: str):
     if not text.strip():
-        await ctx.send("Give me something to reverse. Example: `!reverse nightfall`")
+        await ctx.send("Give me something to reverse. Example: `!reverse gargand`")
         return
     await ctx.send(text[::-1][:1900], allowed_mentions=discord.AllowedMentions.none())
 
@@ -2702,7 +2702,7 @@ async def aiimage_command(ctx: commands.Context, *, prompt: str):
             return
         encoded = response.json()["data"][0]["b64_json"]
         image_bytes = base64.b64decode(encoded, validate=True)
-        file = discord.File(io.BytesIO(image_bytes), filename="nightfall-ai.png")
+        file = discord.File(io.BytesIO(image_bytes), filename="gargand-ai.png")
         e = embed("🌌 Made with Gargand AI", f"**Prompt:** {prompt[:900]}", EMBED_COLOR)
         await ctx.send(embed=e, file=file)
     except requests.RequestException as exc:
@@ -4305,7 +4305,7 @@ async def handle_website_job(job):
 
 async def nightfall_website_bridge():
     if not NIGHTFALL_WEBSITE_URL or not NIGHTFALL_BRIDGE_SECRET:
-        print("Gargand website bridge is disabled; set NIGHTFALL_WEBSITE_URL and NIGHTFALL_BRIDGE_SECRET.")
+        print("GARGAND website bridge is disabled; set GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET (legacy NIGHTFALL_* names are also accepted).")
         return
     while not bot.is_closed():
         try:
