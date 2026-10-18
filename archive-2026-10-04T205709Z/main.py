@@ -42,7 +42,7 @@ if not TOKEN:
     raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Fadehost environment variables.")
 
 PREFIX = "!"
-NIGHTFALL_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "").strip().rstrip("/")
+NIGHTFALL_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "https://testiny-7wuu.onrender.com").strip().rstrip("/")
 NIGHTFALL_BRIDGE_SECRET = (os.getenv("GARGAND_BRIDGE_SECRET") or os.getenv("NIGHTFALL_BRIDGE_SECRET") or "").strip()
 BRIDGE_POLL_SECONDS = 10
 bridge_task = None
@@ -311,7 +311,7 @@ def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> d
         pfp_url = f"{NIGHTFALL_WEBSITE_URL}/gargand-lion.jpg"
     e.set_thumbnail(url=pfp_url or "https://www.svgrepo.com/show/17505/lion-head.svg")
     # Discord embeds support an animated image here; keep the gold divider consistent.
-    e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://www.gifs.cc/line4.gif"))
+    e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://testiny-7wuu.onrender.com/gargand-bar.gif"))
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
