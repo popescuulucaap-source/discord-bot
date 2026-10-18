@@ -1089,8 +1089,8 @@ def setup_dashboard_embed(guild: discord.Guild) -> discord.Embed:
         return f"<#{cfg[key]}>" if cfg.get(key) else "Not set"
 
     e = embed(
-        "⚙️ Gargand setup center",
-        "Configure Gargand with the buttons below. Every change is saved instantly and this dashboard refreshes automatically. ✨",
+        "👑 GARGAND • Setup Center",
+        "Configure GARGAND with the buttons below. Changes save automatically. Use **Server templates** to start with ready-made channels, roles, rules, and welcome messages. ✨",
         EMBED_COLOR,
     )
     e.add_field(name="🛡️ Staff role", value=role_value("staff_role_id"), inline=True)
@@ -1118,7 +1118,7 @@ def setup_dashboard_embed(guild: discord.Guild) -> discord.Embed:
     e.add_field(name="🔒 Jail role", value=role_value("jail_role_id"), inline=True)
     e.add_field(name="🔒 Jail chat", value=channel_value("jail_chat_channel_id"), inline=True)
     e.add_field(name="📝 Jail appeals", value=channel_value("jail_appeal_channel_id"), inline=True)
-    e.set_footer(text="Gargand • setup changes save instantly ✨")
+    e.set_footer(text="GARGAND • setup changes save instantly ✨")
     return e
 
 
@@ -1533,6 +1533,19 @@ class SetupDashboardView(discord.ui.View):
         if not await self.ensure_admin(interaction): return
         v = SetupChannelPickerView("gamble_channel_id", "gambling channel", self.guild_id)
         await interaction.response.send_message("Choose the gambling channel:", view=v, ephemeral=True)
+
+    @discord.ui.button(label="Server templates", emoji="👑", style=discord.ButtonStyle.primary, row=3)
+    async def server_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.ensure_admin(interaction): return
+        await interaction.response.send_message(
+            embed=embed(
+                "👑 GARGAND • Server Templates",
+                "Choose a **Community**, **Gaming**, **Creator**, or **Support** layout. GARGAND adds starter channels, roles, a rules post, and a welcome post without deleting existing content.\n\nMake sure the bot has **Manage Channels** and **Manage Roles**. Review the permissions and starter rules before opening the server.",
+                INFO,
+            ),
+            view=ServerTemplateView(self.guild_id),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="Booster role", emoji="🚀", style=discord.ButtonStyle.secondary, row=4)
     async def booster(self, interaction: discord.Interaction, button: discord.ui.Button):
