@@ -302,8 +302,7 @@ def utc_ts() -> int:
 
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
-    branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\n{description}"
-    e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(title=title, description=(description or "")[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     # Prefer the official GARGAND lion hosted by the website, with a safe fallback.
     pfp_url = (os.getenv("GARGAND_PFP_URL") or "").strip()
