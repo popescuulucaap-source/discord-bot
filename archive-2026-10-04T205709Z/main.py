@@ -310,8 +310,7 @@ def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> d
     if not pfp_url and GARGAND_WEBSITE_URL:
         pfp_url = f"{GARGAND_WEBSITE_URL}/gargand-lion.jpg"
     e.set_thumbnail(url=pfp_url or "https://www.svgrepo.com/show/17505/lion-head.svg")
-    # Discord embeds support an animated image here; keep the gold divider consistent.
-    e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://testiny-7wuu.onrender.com/gargand-bar.gif"))
+    # Keep the embed compact; the lion thumbnail and gold accent carry the branding.
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
@@ -3313,7 +3312,8 @@ async def apply_server_template(guild: discord.Guild, template_key: str) -> dict
         )
         if exists is not None:
             continue
-        overwrites = None
+        # discord.py requires a dictionary even for public channels with no custom overwrites.
+        overwrites = {}
         if private:
             overwrites = {guild.default_role: everyone_hidden}
             for role in role_objects.values():
