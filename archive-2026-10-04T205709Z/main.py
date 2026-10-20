@@ -273,6 +273,17 @@ def db_init():
             restore_at INTEGER NOT NULL,
             PRIMARY KEY (guild_id, channel_id)
         );
+        CREATE TABLE IF NOT EXISTS recovery_snapshots (
+            case_id INTEGER PRIMARY KEY,
+            guild_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL,
+            object_id INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'available',
+            recovered_object_id INTEGER,
+            recovered_by INTEGER
+        );
 CREATE TABLE IF NOT EXISTS speech_counts (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -306,6 +317,13 @@ def save_settings(guild_id: int, data: dict[str, Any]):
 
 def setting(guild: discord.Guild, key: str, default=None):
     return get_settings(guild.id).get(key, default)
+
+
+def bounded_setting_int(guild: discord.Guild, key: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        return max(minimum, min(maximum, int(setting(guild, key, default) or default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def set_setting(guild: discord.Guild, key: str, value: Any):
@@ -563,6 +581,203 @@ def record_moderation_case(
         metadata=metadata,
     ))
     return case_id
+
+
+def recovery_overwrites(channel: discord.abc.GuildChannel) -> list[dict[str, Any]]:
+    saved = []
+    for target, overwrite in channel.overwrites.items():
+        allow, deny = overwrite.pair()
+        saved.append({
+            "target_type": "role" if isinstance(target, discord.Role) else "member",
+            "target_id": int(target.id),
+            "allow": int(allow.value),
+            "deny": int(deny.value),
+        })
+    return saved
+
+
+def channel_recovery_snapshot(channel: discord.abc.GuildChannel) -> dict[str, Any] | None:
+    if isinstance(channel, discord.CategoryChannel):
+        channel_type = "category"
+    elif isinstance(channel, discord.ForumChannel):
+        channel_type = "forum"
+    elif isinstance(channel, discord.StageChannel):
+        channel_type = "stage"
+    elif isinstance(channel, discord.VoiceChannel):
+        channel_type = "voice"
+    elif isinstance(channel, discord.TextChannel):
+        channel_type = "text"
+    else:
+        return None
+    snapshot: dict[str, Any] = {
+        "id": int(channel.id),
+        "type": channel_type,
+        "name": str(channel.name),
+        "position": int(channel.position),
+        "category_id": int(channel.category_id) if channel.category_id else None,
+        "overwrites": recovery_overwrites(channel),
+    }
+    for attribute in ("topic", "slowmode_delay", "nsfw", "default_auto_archive_duration", "bitrate", "user_limit", "rtc_region"):
+        value = getattr(channel, attribute, None)
+        if value is not None:
+            snapshot[attribute] = value
+    quality = getattr(channel, "video_quality_mode", None)
+    if quality is not None:
+        snapshot["video_quality_mode"] = int(quality.value)
+    if isinstance(channel, discord.TextChannel):
+        snapshot["news"] = bool(channel.is_news())
+    return snapshot
+
+
+def role_recovery_snapshot(role: discord.Role) -> dict[str, Any]:
+    return {
+        "id": int(role.id),
+        "name": str(role.name),
+        "permissions": int(role.permissions.value),
+        "colour": int(role.colour.value),
+        "hoist": bool(role.hoist),
+        "mentionable": bool(role.mentionable),
+        "position": int(role.position),
+    }
+
+
+def recovery_changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    return [
+        key for key in before
+        if key != "id" and json.dumps(before.get(key), sort_keys=True) != json.dumps(after.get(key), sort_keys=True)
+    ]
+
+
+def save_recovery_snapshot(case_id: int, guild_id: int, object_type: str, object_id: int, snapshot: dict[str, Any]):
+    conn = db_connect()
+    conn.execute(
+        "INSERT OR REPLACE INTO recovery_snapshots(case_id,guild_id,object_type,object_id,snapshot,created_at,status) VALUES(?,?,?,?,?,?, 'available')",
+        (case_id, guild_id, object_type, object_id, json.dumps(snapshot, separators=(",", ":")), utc_ts()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def restored_channel_overwrites(guild: discord.Guild, saved: list[dict[str, Any]]) -> tuple[dict[Any, discord.PermissionOverwrite], int]:
+    overwrites: dict[Any, discord.PermissionOverwrite] = {}
+    skipped = 0
+    for item in saved:
+        target = guild.get_role(int(item["target_id"])) if item.get("target_type") == "role" else guild.get_member(int(item["target_id"]))
+        if target is None:
+            skipped += 1
+            continue
+        allow = discord.Permissions(int(item.get("allow", 0)))
+        deny = discord.Permissions(int(item.get("deny", 0)))
+        overwrites[target] = discord.PermissionOverwrite.from_pair(allow, deny)
+    return overwrites, skipped
+
+
+async def restore_recovery_snapshot(guild: discord.Guild, case_id: int, actor: discord.Member) -> tuple[bool, str]:
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT * FROM recovery_snapshots WHERE guild_id=? AND case_id=?",
+        (guild.id, case_id),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return False, f"Case `#{case_id}` has no recovery snapshot."
+    if row["status"] != "available":
+        return False, f"Recovery for case `#{case_id}` was already used ({row['status']})."
+    snapshot = json.loads(row["snapshot"])
+    object_type = row["object_type"]
+    object_id = int(row["object_id"])
+    restored_id = object_id
+    skipped_overwrites = 0
+    try:
+        if object_type == "role":
+            role = guild.get_role(object_id)
+            role_kwargs = {
+                "name": snapshot["name"],
+                "permissions": discord.Permissions(int(snapshot["permissions"])),
+                "colour": discord.Colour(int(snapshot["colour"])),
+                "hoist": bool(snapshot["hoist"]),
+                "mentionable": bool(snapshot["mentionable"]),
+                "reason": f"Gargand recovery of case #{case_id} by {actor}",
+            }
+            if role:
+                await role.edit(**role_kwargs)
+                await role.edit(position=max(1, int(snapshot.get("position", role.position))), reason=f"Gargand recovery of case #{case_id}")
+            else:
+                role = await guild.create_role(**role_kwargs)
+                restored_id = role.id
+                await role.edit(position=max(1, int(snapshot.get("position", role.position))), reason=f"Gargand recovery of case #{case_id}")
+            summary = f"Restored role **@{role.name}**. Discord role membership assignments are not recreated."
+        elif object_type == "channel":
+            current = guild.get_channel(object_id)
+            channel_type = snapshot.get("type")
+            category_id = snapshot.get("category_id")
+            category = guild.get_channel(int(category_id)) if category_id else None
+            if category is not None and not isinstance(category, discord.CategoryChannel):
+                category = None
+            overwrites, skipped_overwrites = restored_channel_overwrites(guild, snapshot.get("overwrites") or [])
+            if current is None:
+                common = {
+                    "name": snapshot["name"], "overwrites": overwrites,
+                    "position": max(0, int(snapshot.get("position", 0))),
+                    "reason": f"Gargand recovery of case #{case_id} by {actor}",
+                }
+                if channel_type == "category":
+                    current = await guild.create_category(**common)
+                elif channel_type == "text":
+                    common.update({"category": category, "topic": snapshot.get("topic"), "slowmode_delay": int(snapshot.get("slowmode_delay", 0)), "nsfw": bool(snapshot.get("nsfw", False))})
+                    common["news"] = bool(snapshot.get("news", False))
+                    if snapshot.get("default_auto_archive_duration") is not None:
+                        common["default_auto_archive_duration"] = int(snapshot["default_auto_archive_duration"])
+                    current = await guild.create_text_channel(**common)
+                elif channel_type == "voice":
+                    common.update({"category": category, "bitrate": int(snapshot.get("bitrate", 64000)), "user_limit": int(snapshot.get("user_limit", 0))})
+                    if snapshot.get("rtc_region") is not None:
+                        common["rtc_region"] = snapshot["rtc_region"]
+                    current = await guild.create_voice_channel(**common)
+                elif channel_type == "stage":
+                    common.update({"category": category, "topic": snapshot.get("topic"), "bitrate": int(snapshot.get("bitrate", 64000))})
+                    if snapshot.get("rtc_region") is not None:
+                        common["rtc_region"] = snapshot["rtc_region"]
+                    current = await guild.create_stage_channel(**common)
+                elif channel_type == "forum":
+                    common.update({"category": category, "topic": snapshot.get("topic"), "slowmode_delay": int(snapshot.get("slowmode_delay", 0)), "nsfw": bool(snapshot.get("nsfw", False))})
+                    current = await guild.create_forum(**common)
+                else:
+                    return False, f"Channel type `{channel_type}` cannot be recreated automatically. The snapshot remains available."
+                restored_id = current.id
+            else:
+                values = {"name": snapshot["name"], "position": max(0, int(snapshot.get("position", 0))), "overwrites": overwrites, "category": category}
+                if hasattr(current, "topic"):
+                    values["topic"] = snapshot.get("topic")
+                if hasattr(current, "slowmode_delay"):
+                    values["slowmode_delay"] = int(snapshot.get("slowmode_delay", 0))
+                if hasattr(current, "nsfw"):
+                    values["nsfw"] = bool(snapshot.get("nsfw", False))
+                if hasattr(current, "bitrate"):
+                    values["bitrate"] = int(snapshot.get("bitrate", current.bitrate))
+                if hasattr(current, "user_limit"):
+                    values["user_limit"] = int(snapshot.get("user_limit", current.user_limit))
+                if hasattr(current, "rtc_region"):
+                    values["rtc_region"] = snapshot.get("rtc_region")
+                await current.edit(**values, reason=f"Gargand recovery of case #{case_id} by {actor}")
+            summary = f"Restored **#{current.name}** ({current.type})."
+            if skipped_overwrites:
+                summary += f" Skipped {skipped_overwrites} permission overwrite(s) for roles or members no longer in the server."
+        else:
+            return False, "This snapshot type is not supported."
+    except (discord.Forbidden, discord.HTTPException, discord.NotFound, ValueError, TypeError, KeyError) as exc:
+        return False, f"Discord could not restore case `#{case_id}` ({type(exc).__name__}). Check Gargand's permissions and role order; the snapshot remains available."
+
+    conn = db_connect()
+    conn.execute(
+        "UPDATE recovery_snapshots SET status='recovered',recovered_object_id=?,recovered_by=? WHERE guild_id=? AND case_id=? AND status='available'",
+        (restored_id, actor.id, guild.id, case_id),
+    )
+    conn.commit()
+    conn.close()
+    record_moderation_case(guild, "recovery", actor, None, f"Recovery of case #{case_id}", outcome="success", details=summary)
+    await log_action(guild, "♻️ Security recovery complete", f"{summary}\n**Source case:** `#{case_id}`\n**Recovered by:** {actor.mention}", SUCCESS)
+    return True, summary
 
 
 @bot.listen("on_member_join")
@@ -2189,7 +2404,8 @@ def get_coins(guild_id: int, user_id: int) -> int:
 # -----------------------------
 
 invite_cache: dict[int, dict[str, int]] = {}
-anti_nuke_events: dict[tuple[int, int, str], deque[int]] = defaultdict(deque)
+anti_nuke_events: dict[tuple[int, int, str], deque[float]] = defaultdict(deque)
+anti_nuke_escalated: set[tuple[int, int, str]] = set()
 raid_mentions: dict[tuple[int, int], deque[int]] = defaultdict(deque)
 raid_join_windows: dict[int, deque[float]] = defaultdict(deque)
 raid_watch_last_alert: dict[int, float] = {}
@@ -3508,6 +3724,44 @@ async def moderation_cases_command(ctx: commands.Context, member: Optional[disco
     await ctx.send(embed=embed(title, "\n".join(lines), INFO))
 
 
+@bot.hybrid_command(name="recover")
+@admin_only()
+async def recover_case_command(ctx: commands.Context, case_id: int):
+    """Restore a deleted channel/role or undo a saved channel/role edit."""
+    if case_id <= 0:
+        await ctx.send(embed=embed("♻️ Invalid case", "Enter a positive case number, for example `!recover 42`.", WARNING), delete_after=8)
+        return
+    restored, message = await restore_recovery_snapshot(ctx.guild, case_id, ctx.author)
+    await ctx.send(embed=embed("♻️ Recovery complete" if restored else "♻️ Recovery unavailable", message, SUCCESS if restored else WARNING), delete_after=15)
+
+
+@bot.hybrid_command(name="antinuke")
+@admin_only()
+async def anti_nuke_status_command(ctx: commands.Context):
+    """Show this server's anti-nuke thresholds and optional response settings."""
+    guild = ctx.guild
+    cfg = get_settings(guild.id)
+    trusted_ids = cfg.get("anti_nuke_trusted_role_ids", [])
+    if not isinstance(trusted_ids, list):
+        trusted_ids = []
+    trusted_names = [role.name for role_id in trusted_ids if str(role_id).isdigit() and (role := guild.get_role(int(role_id)))]
+    thresholds = [
+        ("Channel deletions", "anti_nuke_threshold_channel_delete", 3),
+        ("Role deletions", "anti_nuke_threshold_role_delete", 3),
+        ("Channel edits", "anti_nuke_threshold_channel_update", 4),
+        ("Role edits", "anti_nuke_threshold_role_update", 4),
+    ]
+    summary = "\n".join(f"**{label}:** {bounded_setting_int(guild, key, default, 2, 10)}" for label, key, default in thresholds)
+    summary += f"\n**Window:** {bounded_setting_int(guild, 'anti_nuke_window_seconds', 10, 5, 60)} seconds"
+    summary += f"\n**Temporary lockdown:** {'On' if cfg.get('anti_nuke_auto_lockdown') else 'Off'}"
+    summary += f"\n**Automatic ban:** {'On' if cfg.get('anti_nuke_auto_ban') else 'Off'}"
+    summary += f"\n**Trusted roles:** {', '.join(trusted_names) if trusted_names else 'None configured'}"
+    e = embed("🛡️ Anti-nuke configuration", summary, INFO)
+    e.add_field(name="Status", value="Enabled" if cfg.get("anti_nuke") else "Disabled", inline=True)
+    e.set_footer(text="Use the web dashboard to change thresholds and trusted roles • !recover <case id> restores saved snapshots")
+    await ctx.send(embed=e)
+
+
 @bot.hybrid_command(name="clearwarnings", aliases=["resetwarnings"])
 @admin_only()
 async def clearwarnings(ctx: commands.Context, member: discord.Member):
@@ -4716,42 +4970,165 @@ async def on_guild_channel_create(channel: discord.abc.GuildChannel):
 @bot.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
     guild = channel.guild
-    if not setting(guild, "anti_nuke", False): return
-    await detect_destructive_action(guild, "channel_delete")
+    await detect_destructive_action(guild, "channel_delete", channel, channel_recovery_snapshot(channel))
 
 
 @bot.event
 async def on_guild_role_delete(role: discord.Role):
     guild = role.guild
-    if not setting(guild, "anti_nuke", False): return
-    await detect_destructive_action(guild, "role_delete")
+    await detect_destructive_action(guild, "role_delete", role, role_recovery_snapshot(role))
 
 
-async def detect_destructive_action(guild: discord.Guild, action_key: str):
-    try:
-        audit = [entry async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.channel_delete if action_key == "channel_delete" else discord.AuditLogAction.role_delete)]
-    except (discord.Forbidden, discord.HTTPException):
-        await emergency_lockdown(guild)
-        await log_action(guild, "🚨 Anti-nuke lockdown", "Audit log access failed, so Gargand applied a safer emergency lockdown.", DANGER)
+@bot.event
+async def on_guild_channel_update(before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+    if not setting(after.guild, "anti_nuke", False):
         return
-    if not audit: return
-    entry = audit[0]
-    actor = entry.user
-    if not actor or actor.bot: return
-    now = utc_ts()
-    key = (guild.id, actor.id, action_key)
-    q = anti_nuke_events[key]
-    q.append(now)
-    while q and now - q[0] > 10: q.popleft()
-    if len(q) >= 3:
-        member = guild.get_member(actor.id)
+    before_snapshot = channel_recovery_snapshot(before)
+    after_snapshot = channel_recovery_snapshot(after)
+    if not before_snapshot or not after_snapshot:
+        return
+    before_snapshot["changed_fields"] = recovery_changed_fields(before_snapshot, after_snapshot)
+    if not before_snapshot["changed_fields"]:
+        return
+    await detect_destructive_action(after.guild, "channel_update", after, before_snapshot)
+
+
+@bot.event
+async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    if not setting(after.guild, "anti_nuke", False):
+        return
+    before_snapshot = role_recovery_snapshot(before)
+    after_snapshot = role_recovery_snapshot(after)
+    before_snapshot["changed_fields"] = recovery_changed_fields(before_snapshot, after_snapshot)
+    if not before_snapshot["changed_fields"]:
+        return
+    await detect_destructive_action(after.guild, "role_update", after, before_snapshot)
+
+
+ANTI_NUKE_ACTIONS = {
+    "channel_delete": discord.AuditLogAction.channel_delete,
+    "role_delete": discord.AuditLogAction.role_delete,
+    "channel_update": discord.AuditLogAction.channel_update,
+    "role_update": discord.AuditLogAction.role_update,
+}
+ANTI_NUKE_THRESHOLDS = {
+    "channel_delete": ("anti_nuke_threshold_channel_delete", 3),
+    "role_delete": ("anti_nuke_threshold_role_delete", 3),
+    "channel_update": ("anti_nuke_threshold_channel_update", 4),
+    "role_update": ("anti_nuke_threshold_role_update", 4),
+}
+
+
+async def detect_destructive_action(guild: discord.Guild, action_key: str, target, snapshot: dict[str, Any] | None):
+    monitoring = bool(setting(guild, "anti_nuke", False))
+    if action_key.endswith("_update") and not monitoring:
+        return
+    audit_error = False
+    actor = None
+    try:
+        audit = [entry async for entry in guild.audit_logs(limit=8, action=ANTI_NUKE_ACTIONS[action_key])]
+        target_id = int(getattr(target, "id", 0) or 0)
+        now_utc = datetime.now(timezone.utc).timestamp()
+        for entry in audit:
+            entry_target_id = int(getattr(getattr(entry, "target", None), "id", 0) or 0)
+            created_at = getattr(entry, "created_at", None)
+            age = abs(now_utc - created_at.timestamp()) if created_at else 999
+            if entry_target_id == target_id and age <= 25:
+                actor = entry.user
+                break
+    except (discord.Forbidden, discord.HTTPException):
+        audit_error = True
+
+    window = bounded_setting_int(guild, "anti_nuke_window_seconds", 10, 5, 60)
+    threshold_key, default_threshold = ANTI_NUKE_THRESHOLDS[action_key]
+    threshold = bounded_setting_int(guild, threshold_key, default_threshold, 2, 10)
+    trusted_role_ids = setting(guild, "anti_nuke_trusted_role_ids", [])
+    if not isinstance(trusted_role_ids, (list, tuple, set)):
+        trusted_role_ids = []
+    trusted_role_ids = {int(value) for value in trusted_role_ids if str(value).isdigit() and int(value) != guild.id}
+    member = guild.get_member(actor.id) if actor else None
+    trusted = bool(actor and (actor.id == guild.owner_id or (member and any(role.id in trusted_role_ids for role in member.roles))))
+    now = time.monotonic()
+    count = 0
+    threshold_reached = False
+    if actor and not actor.bot and monitoring and not trusted:
+        key = (guild.id, actor.id, action_key)
+        q = anti_nuke_events[key]
+        while q and now - q[0] > window:
+            q.popleft()
+        if not q:
+            anti_nuke_escalated.discard(key)
+        q.append(now)
+        count = len(q)
+        threshold_reached = count >= threshold and key not in anti_nuke_escalated
+        if threshold_reached:
+            anti_nuke_escalated.add(key)
+
+    action_label = action_key.replace("_", " ")
+    details = []
+    if audit_error:
+        details.append("Discord audit log access failed; actor could not be verified and no automatic response was taken.")
+    elif actor:
+        details.append(f"Audit log actor: {actor} ({actor.id}).")
+    else:
+        details.append("No matching recent audit log entry was available for the changed object.")
+    if monitoring and actor and not actor.bot and trusted:
+        details.append("Actor matches a trusted owner/role; threshold counting and automatic escalation were skipped.")
+    elif monitoring and actor and not actor.bot:
+        details.append(f"Observed {count} {action_label} event(s) in {window}s; threshold is {threshold}.")
+    elif not monitoring:
+        details.append("Anti-nuke monitoring is disabled; this operation was logged for review.")
+    if snapshot and snapshot.get("changed_fields"):
+        changed = ", ".join(str(item).replace("_", " ") for item in snapshot["changed_fields"])
+        details.append(f"Changed fields: {changed}.")
+    if threshold_reached:
+        details.append("Configured threshold reached; staff were alerted before any optional response.")
+
+    case_id = record_moderation_case(
+        guild,
+        action_key,
+        actor or bot.user,
+        target,
+        "Destructive server change detected; admin review recommended",
+        outcome="threshold" if threshold_reached else "watch",
+        details=" ".join(details),
+        event_type="security_incident",
+    )
+    if snapshot:
+        save_recovery_snapshot(case_id, guild.id, "role" if action_key.startswith("role_") else "channel", int(target.id), snapshot)
+    await log_action(
+        guild,
+        "🚨 Anti-nuke security review" if monitoring else "🧾 Recovery snapshot saved",
+        f"**Action:** {action_label}\n**Object:** {getattr(target, 'name', 'unknown')} (`{target.id}`)\n**Actor:** {actor.mention if actor else 'Unknown (audit log unavailable)'}\n**Case:** `#{case_id}`\n" + (f"**Burst:** {count}/{threshold} in {window}s" if monitoring and actor and not actor.bot else "A recovery snapshot is available to administrators with `!recover <case id>`.") + "\nReview the incident in the website dashboard.",
+        WARNING if not threshold_reached else DANGER,
+    )
+
+    if not threshold_reached:
+        return
+
+    responses = []
+    if setting(guild, "anti_nuke_auto_lockdown", False):
+        locked, failed, restore_at = await start_raid_lockdown(
+            guild, 10, actor=bot.user, reason=f"anti-nuke threshold: {action_label} by {actor}",
+        )
+        responses.append(f"temporary lockdown: {locked} channel(s), {failed} failed, expires <t:{restore_at}:R>")
+    if setting(guild, "anti_nuke_auto_ban", False) and not trusted:
         if member and member.id != guild.owner_id:
             try:
-                await guild.ban(actor, reason=f"Gargand anti-nuke: too many {action_key.replace('_',' ')} actions")
-                await log_action(guild, "🚨 Anti-nuke action", f"Banned {actor.mention} after repeated **{action_key.replace('_',' ')}** events.", DANGER)
-            except discord.Forbidden:
-                await emergency_lockdown(guild)
-                await log_action(guild, "🚨 Anti-nuke lockdown", f"Could not ban {actor}; emergency lockdown applied instead.", DANGER)
+                await guild.ban(actor, reason=f"Gargand anti-nuke threshold reached for {action_label}")
+                responses.append("actor banned")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                responses.append(f"ban failed ({type(exc).__name__})")
+        else:
+            responses.append("automatic ban skipped because the actor could not be safely resolved as a member")
+    if not responses:
+        responses.append("staff alert only; automatic lockdown and ban are disabled")
+    await log_action(
+        guild,
+        "🚨 Anti-nuke threshold response",
+        f"**Case:** `#{case_id}`\n**Actor:** {actor.mention}\n" + "\n".join(f"• {item}" for item in responses),
+        DANGER,
+    )
 
 
 @bot.event
