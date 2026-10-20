@@ -108,9 +108,15 @@ def install(main):
                     if str(word).casefold() in message.content.casefold():
                         reason = "filtered word"; break
             if reason:
-                try: await message.delete()
-                except Exception: pass
+                message_deleted = False
+                try:
+                    await message.delete()
+                    message_deleted = True
+                except Exception:
+                    pass
                 punishment = str(setting(guild, "automod_punishment", "timeout") or "timeout").lower()
+                outcome = "success"
+                error_type = ""
                 try:
                     if punishment == "kick":
                         await member.kick(reason="Gargand Auto-Mod: "+reason)
@@ -118,7 +124,26 @@ def install(main):
                         await guild.ban(member, reason="Gargand Auto-Mod: "+reason, delete_message_seconds=0)
                     else:
                         await member.timeout(main.timedelta(minutes=5), reason="Gargand Auto-Mod: "+reason)
-                except Exception: pass
+                except Exception as exc:
+                    outcome = "failed"
+                    error_type = type(exc).__name__
+                await main.send_telemetry(
+                    "moderation_case",
+                    guild=guild,
+                    user=main.bot.user,
+                    command_name="automod",
+                    metadata={
+                        "case_id": f"{guild.id}-{message.id}",
+                        "action": "Auto-Mod",
+                        "punishment": punishment,
+                        "target_id": str(member.id),
+                        "target_name": str(member.display_name)[:120],
+                        "reason": str(reason)[:500],
+                        "outcome": outcome,
+                        "message_deleted": message_deleted,
+                        "error_type": error_type,
+                    },
+                )
                 log_id = setting(guild, "automod_log_channel_id") or setting(guild, "logs_channel_id")
                 log_ch = guild.get_channel(log_id) if log_id else None
                 if isinstance(log_ch, main.discord.TextChannel):
