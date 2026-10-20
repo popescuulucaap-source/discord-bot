@@ -832,7 +832,7 @@ class VerificationView(discord.ui.View):
         VERIFICATION_NEXT_CHALLENGE[key] = now + 20
 
         words = ["NIGHT", "STAR", "LUNA", "FOX", "RUNE", "NOVA", "EMBER", "CROWN", "GLORY", "SILVER", "GOLDEN", "COMET", "FROST", "RIVER", "SABLE", "AURORA", "ORBIT", "THUNDER", "PHOENIX"]
-        phrase = " ".join(secrets.choice(words) for _ in range(4)) + f" {random.randint(100, 999)}"
+        phrase = " ".join(secrets.choice(words) for _ in range(4)) + f" {secrets.randbelow(900) + 100}"
         await interaction.response.send_modal(VerificationModal(guild.id, member.id, phrase))
         await asyncio.sleep(0.2)
         try:
@@ -899,24 +899,29 @@ class VerificationModal(discord.ui.Modal, title="Verify your account"):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        autorole_id = setting(guild, "autorole_id")
-        autorole = guild.get_role(autorole_id) if autorole_id else None
-        roles_to_add = []
-        for role in (verified, autorole):
-            if role and role not in member.roles and role not in roles_to_add:
-                roles_to_add.append(role)
+        verified_added = False
         try:
-            if roles_to_add:
-                await member.add_roles(*roles_to_add, reason="Gargand verification completed")
+            await member.add_roles(verified, reason="Gargand verification completed")
+            verified_added = True
             await member.remove_roles(unverified, reason="Gargand verification completed")
         except discord.HTTPException as exc:
-            try:
-                await member.remove_roles(verified, reason="Verification role update failed")
-            except discord.HTTPException:
-                pass
+            if verified_added:
+                try:
+                    await member.remove_roles(verified, reason="Verification role update failed")
+                except discord.HTTPException:
+                    pass
             print(f"Verification role update failed in guild {guild.id}: {type(exc).__name__}")
             await interaction.followup.send("Gargand could not finish updating your roles. Your access remains restricted; ask a moderator for help.", ephemeral=True)
             return
+
+        autorole_id = setting(guild, "autorole_id")
+        autorole = guild.get_role(autorole_id) if autorole_id else None
+        if autorole and autorole != verified and autorole not in member.roles:
+            try:
+                await member.add_roles(autorole, reason="Gargand verification completed")
+            except discord.HTTPException as exc:
+                print(f"Post-verification auto role update failed in guild {guild.id}: {type(exc).__name__}")
+                await log_action(guild, "⚠️ Auto role setup issue", f"{member.mention} passed verification, but Gargand could not add the configured auto role. Check role permissions and order.", WARNING)
 
         key = (guild.id, member.id)
         VERIFICATION_FAILURES.pop(key, None)
