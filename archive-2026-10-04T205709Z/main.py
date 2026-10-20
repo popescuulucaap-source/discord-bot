@@ -100,9 +100,10 @@ async def send_moderation_case(action, guild, actor, parameters=None, invocation
     )
     reason = str(parameters.get("reason") or "No reason provided").strip()[:500]
     invocation_ref = str(invocation_id or time.time_ns())
+    action_label = {"clearwarnings": "Clear warnings"}.get(action, action.title())
     metadata = {
         "case_id": f"{guild.id}-{invocation_ref}",
-        "action": action,
+        "action": action_label,
         "target_id": str(target.id) if target else "",
         "target_name": str(getattr(target, "display_name", target) or "")[:120] if target else "",
         "reason": reason,
