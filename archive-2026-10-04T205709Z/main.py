@@ -74,6 +74,57 @@ async def send_telemetry(event_type: str, guild=None, user=None, command_name: s
             pass
     await asyncio.to_thread(post)
 
+
+MODERATION_CASE_COMMANDS = {
+    "ban", "kick", "warn", "timeout", "purge", "clearwarnings", "jail", "unjail",
+}
+
+
+async def send_moderation_case(action, guild, actor, parameters=None, invocation_id=None, context=None):
+    """Send a completed moderation action to the website's private case history."""
+    action = str(action or "").lower()
+    if not guild or action not in MODERATION_CASE_COMMANDS:
+        return
+
+    parameters = parameters if isinstance(parameters, dict) else {}
+    actor_id = getattr(actor, "id", None)
+    values = list(parameters.values())
+    if context is not None:
+        values.extend(getattr(context, "args", None) or [])
+    target = next(
+        (
+            value for value in values
+            if isinstance(value, discord.Member) and getattr(value, "id", None) != actor_id
+        ),
+        None,
+    )
+    reason = str(parameters.get("reason") or "No reason provided").strip()[:500]
+    invocation_ref = str(invocation_id or time.time_ns())
+    metadata = {
+        "case_id": f"{guild.id}-{invocation_ref}",
+        "action": action,
+        "target_id": str(target.id) if target else "",
+        "target_name": str(getattr(target, "display_name", target) or "")[:120] if target else "",
+        "reason": reason,
+        "outcome": "success",
+    }
+
+    if action == "purge":
+        channel = getattr(context, "channel", None) if context is not None else None
+        amount = parameters.get("amount")
+        channel_name = getattr(channel, "name", "")
+        metadata["details"] = f"Requested cleanup of {amount or 'recent'} messages" + (f" in #{channel_name}" if channel_name else "")
+    elif action == "clearwarnings":
+        metadata["details"] = "Stored warning count cleared"
+
+    await send_telemetry(
+        "moderation_case",
+        guild=guild,
+        user=actor,
+        command_name=action,
+        metadata=metadata,
+    )
+
 OPENAI_TEXT_MODEL = os.getenv("OPENAI_TEXT_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
 AI_TEXT_COOLDOWN_SECONDS = 20
 AI_TEXT_LAST_USED: dict[int, float] = {}
@@ -3811,6 +3862,20 @@ async def on_command(ctx: commands.Context):
     ))
 
 @bot.event
+async def on_command_completion(ctx: commands.Context):
+    command = getattr(ctx, "command", None)
+    action = str(getattr(command, "name", "") or "").lower()
+    if action in MODERATION_CASE_COMMANDS:
+        asyncio.create_task(send_moderation_case(
+            action,
+            ctx.guild,
+            ctx.author,
+            getattr(ctx, "kwargs", {}) or {},
+            invocation_id=getattr(getattr(ctx, "message", None), "id", None),
+            context=ctx,
+        ))
+
+@bot.event
 async def on_app_command_completion(interaction: discord.Interaction, command):
     name = getattr(command, "qualified_name", "") or getattr(command, "name", "")
     asyncio.create_task(send_telemetry(
@@ -3820,6 +3885,17 @@ async def on_app_command_completion(interaction: discord.Interaction, command):
         command_name=name,
         metadata={"command": name, "invocation_type": "slash"},
     ))
+    action = str(getattr(command, "name", "") or "").lower()
+    if action in MODERATION_CASE_COMMANDS:
+        namespace = getattr(interaction, "namespace", None)
+        parameters = getattr(namespace, "__dict__", {}) or {}
+        asyncio.create_task(send_moderation_case(
+            action,
+            interaction.guild,
+            interaction.user,
+            parameters,
+            invocation_id=getattr(interaction, "id", None),
+        ))
 
 @bot.event
 async def on_ready():
