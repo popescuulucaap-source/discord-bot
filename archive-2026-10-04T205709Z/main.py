@@ -302,16 +302,14 @@ def utc_ts() -> int:
 
 
 def embed(title: str, description: str, color: discord.Color = EMBED_COLOR) -> discord.Embed:
-    branded_description = f"🟡 ━━━━━━━━━━━ ✦ GARGAND ✦ ━━━━━━━━━━━ 🟡\n{description}"
-    e = discord.Embed(title=title, description=branded_description[:4096], color=color, timestamp=datetime.now(timezone.utc))
+    e = discord.Embed(title=title, description=(description or "")[:4096], color=color, timestamp=datetime.now(timezone.utc))
     e.set_footer(text="✦ GARGAND • COMMUNITY SYSTEMS ✦")
     # Prefer the official GARGAND lion hosted by the website, with a safe fallback.
     pfp_url = (os.getenv("GARGAND_PFP_URL") or "").strip()
     if not pfp_url and GARGAND_WEBSITE_URL:
         pfp_url = f"{GARGAND_WEBSITE_URL}/gargand-lion.jpg"
     e.set_thumbnail(url=pfp_url or "https://www.svgrepo.com/show/17505/lion-head.svg")
-    # Discord embeds support an animated image here; keep the gold divider consistent.
-    e.set_image(url=os.getenv("GARGAND_EMBED_BAR_URL", "https://testiny-7wuu.onrender.com/gargand-bar.gif"))
+    # Keep the embed compact; the lion thumbnail and gold accent carry the branding.
     if bot.user:
         e.set_author(name="GARGAND  /  COMMUNITY SYSTEMS", icon_url=bot.user.display_avatar.url)
     return e
@@ -3313,7 +3311,8 @@ async def apply_server_template(guild: discord.Guild, template_key: str) -> dict
         )
         if exists is not None:
             continue
-        overwrites = None
+        # discord.py requires a dictionary even for public channels with no custom overwrites.
+        overwrites = {}
         if private:
             overwrites = {guild.default_role: everyone_hidden}
             for role in role_objects.values():
@@ -4345,15 +4344,75 @@ async def build_guild_invite(guild):
             continue
     return ""
 
+def collect_guild_health(guild, settings):
+    """Report the bot's cached permission and setup state to the dashboard."""
+    member = guild.me
+    if not member:
+        return {"available": False}
+
+    required_permissions = (
+        "administrator", "view_channel", "send_messages", "embed_links",
+        "manage_roles", "manage_channels", "manage_messages",
+        "kick_members", "ban_members", "moderate_members",
+    )
+    permissions = {
+        name: bool(getattr(member.guild_permissions, name, False))
+        for name in required_permissions
+    }
+    roles = {}
+    for key in ("staff_role_id", "autorole_id", "booster_role_id", "verified_role_id", "unverified_role_id", "muted_role_id", "jail_role_id"):
+        try:
+            role_id = int(settings.get(key) or 0)
+        except (TypeError, ValueError):
+            role_id = 0
+        role = guild.get_role(role_id) if role_id else None
+        assignable = bool(role and not role.managed and member.top_role > role)
+        roles[key] = {
+            "id": str(role_id) if role_id else "",
+            "configured": bool(role_id),
+            "exists": bool(role),
+            "name": role.name if role else "",
+            "assignable": assignable,
+        }
+
+    channels = {}
+    for key in ("logs_channel_id", "verification_channel_id", "ticket_panel_channel_id", "automod_log_channel_id", "welcome_channel_id", "feedback_channel_id"):
+        try:
+            channel_id = int(settings.get(key) or 0)
+        except (TypeError, ValueError):
+            channel_id = 0
+        channel = guild.get_channel(channel_id) if channel_id else None
+        channel_permissions = channel.permissions_for(member) if channel else None
+        channels[key] = {
+            "id": str(channel_id) if channel_id else "",
+            "configured": bool(channel_id),
+            "exists": bool(channel),
+            "name": getattr(channel, "name", "") if channel else "",
+            "can_view": bool(channel_permissions and channel_permissions.view_channel),
+            "can_send": bool(channel_permissions and channel_permissions.send_messages),
+            "can_embed": bool(channel_permissions and channel_permissions.embed_links),
+        }
+
+    return {
+        "available": True,
+        "permissions": permissions,
+        "top_role_position": int(member.top_role.position),
+        "roles": roles,
+        "channels": channels,
+    }
+
+
 async def collect_guild_snapshot():
     snapshot = []
     for guild in bot.guilds:
+        settings = get_settings(guild.id)
         snapshot.append({
             "id": str(guild.id),
             "name": guild.name,
             "member_count": guild.member_count,
             "invite_url": await build_guild_invite(guild),
-            "settings": get_settings(guild.id),
+            "settings": settings,
+            "health": collect_guild_health(guild, settings),
         })
     return snapshot
 
