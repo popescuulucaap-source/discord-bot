@@ -37,6 +37,8 @@ OPENROUTER_TEXT_MODEL = os.getenv(
 TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 BOT_CLIENT_ID = os.getenv("BOT_CLIENT_ID")  # optional; automatically discovered after login
 DB_PATH = os.getenv("BOT_DB", "bot_data.sqlite3")
+OFFICIAL_GUILD_ID = int(os.getenv("GARGAND_OFFICIAL_GUILD_ID", "1561076743236747387"))
+OFFICIAL_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("GARGAND_ANNOUNCEMENT_CHANNEL_ID", "1561345082316038244"))
 
 if not TOKEN:
     raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Fadehost environment variables.")
@@ -1825,43 +1827,21 @@ class AppealTicketView(discord.ui.View):
 
 def setup_dashboard_embed(guild: discord.Guild) -> discord.Embed:
     cfg = get_settings(guild.id)
-
-    def role_value(key: str) -> str:
-        return f"<@&{cfg[key]}>" if cfg.get(key) else "Not set"
-
-    def channel_value(key: str) -> str:
-        return f"<#{cfg[key]}>" if cfg.get(key) else "Not set"
-
+    checks = ["staff_role_id", "logs_channel_id", "welcome_channel_id", "verification_channel_id", "ticket_panel_channel_id", "autorole_id", "jail_role_id"]
+    ready = sum(bool(cfg.get(key)) for key in checks)
+    bar = "🟨" * ready + "⬛" * (len(checks) - ready)
     e = embed(
-        "👑 GARGAND • Setup Center",
-        "Configure GARGAND with the buttons below. Changes save automatically. Use **Server templates** to start with ready-made channels, roles, rules, and welcome messages. ✨",
+        "👑 GARGAND • Server Command Center",
+        f"**{guild.name}** · setup readiness **{ready}/{len(checks)}**\n{bar}\nPick a control below; changes save automatically. Use **Templates** to create a complete starter layout.",
         EMBED_COLOR,
     )
-    e.add_field(name="🛡️ Staff role", value=role_value("staff_role_id"), inline=True)
-    e.add_field(name="📜 Logs", value=channel_value("logs_channel_id"), inline=True)
-    appeal_guild = bot.get_guild(int(cfg["appeal_server_id"])) if cfg.get("appeal_server_id") else None
-    appeal_value = appeal_guild.name[:100] if appeal_guild else ("Configured • bot not joined" if cfg.get("appeal_server_id") else "Not set")
-    e.add_field(name="📝 Appeal server", value=appeal_value, inline=True)
-    e.add_field(name="🎫 Ticket category", value=(f"<#{cfg.get('ticket_category_id')}>" if cfg.get("ticket_category_id") else "Not set"), inline=True)
-    e.add_field(name="👋 Welcome", value=channel_value("welcome_channel_id"), inline=True)
-    e.add_field(name="🚪 Leave", value=channel_value("leave_channel_id"), inline=True)
-    e.add_field(name="🎭 Auto role", value=role_value("autorole_id"), inline=True)
-    e.add_field(name="✅ Verification", value=channel_value("verification_channel_id"), inline=True)
-    e.add_field(name="⌨️ Commands", value=channel_value("command_channel_id"), inline=True)
-    e.add_field(name="⭐ Vouch", value=channel_value("vouch_channel_id"), inline=True)
-    e.add_field(name="💬 Feedback", value=channel_value("feedback_channel_id"), inline=True)
-    e.add_field(name="📸 Proof", value=channel_value("proof_channel_id"), inline=True)
-    e.add_field(name="🎰 Gamble", value=channel_value("gamble_channel_id"), inline=True)
-    e.add_field(name="🚀 Booster", value=role_value("booster_role_id"), inline=True)
-    e.add_field(name="📋 Applications", value=channel_value("staff_application_channel_id"), inline=True)
-    e.add_field(name="🧱 Anti-raid", value="🟢 ENABLED" if cfg.get("anti_raid") else "🔴 DISABLED", inline=True)
-    e.add_field(name="🛡️ Anti-nuke", value="🟢 ENABLED" if cfg.get("anti_nuke") else "🔴 DISABLED", inline=True)
-    e.add_field(name="🔗 Anti-link", value="🟢 ENABLED" if cfg.get("anti_link") else "🔴 DISABLED", inline=True)
-    e.add_field(name="🤝 J4J", value="🟢 ENABLED" if cfg.get("j4j") else "🔴 DISABLED", inline=True)
-    e.add_field(name="🔒 Jail", value="🟢 ENABLED" if cfg.get("jail_enabled") else "🔴 DISABLED", inline=True)
-    e.add_field(name="🔒 Jail role", value=role_value("jail_role_id"), inline=True)
-    e.add_field(name="🔒 Jail chat", value=channel_value("jail_chat_channel_id"), inline=True)
-    e.add_field(name="📝 Jail appeals", value=channel_value("jail_appeal_channel_id"), inline=True)
+    def mention(key, prefix):
+        return f"{prefix}{cfg[key]}>" if cfg.get(key) else "—"
+    e.add_field(name="🛡️ Staff & safety", value=f"Staff {mention('staff_role_id', '<@&')} · Logs {mention('logs_channel_id', '<#')}\nAnti-raid {'🟢' if cfg.get('anti_raid') else '⚪'} · Anti-nuke {'🟢' if cfg.get('anti_nuke') else '⚪'} · Anti-link {'🟢' if cfg.get('anti_link') else '⚪'}", inline=False)
+    e.add_field(name="👋 Member onboarding", value=f"Welcome {mention('welcome_channel_id', '<#')} · Verify {mention('verification_channel_id', '<#')}\nAuto role {mention('autorole_id', '<@&')} · Leave {mention('leave_channel_id', '<#')}", inline=True)
+    e.add_field(name="🎫 Support & community", value=f"Tickets {mention('ticket_panel_channel_id', '<#')} · Feedback {mention('feedback_channel_id', '<#')}\nVouches {mention('vouch_channel_id', '<#')} · Applications {mention('staff_application_channel_id', '<#')}", inline=True)
+    e.add_field(name="🔒 Jail & appeals", value=f"Jail {'🟢 enabled' if cfg.get('jail_enabled') else '⚪ off'} · Role {mention('jail_role_id', '<@&')}\nChat {mention('jail_chat_channel_id', '<#')} · Appeals {mention('jail_appeal_channel_id', '<#')}", inline=True)
+    e.add_field(name="✨ More channels", value=f"Commands {mention('command_channel_id', '<#')} · Proof {mention('proof_channel_id', '<#')}\nGamble {mention('gamble_channel_id', '<#')} · Booster role {mention('booster_role_id', '<@&')}", inline=True)
     e.set_footer(text="GARGAND • setup changes save instantly ✨")
     return e
 
@@ -4027,6 +4007,72 @@ async def setup(ctx: commands.Context):
         pass
 
 
+@bot.hybrid_command(name="diagnose")
+@admin_only()
+async def diagnose(ctx: commands.Context):
+    """Check bot permissions and the Gargand website bridge."""
+    me = ctx.guild.me
+    perms = me.guild_permissions if me else discord.Permissions.none()
+    bridge_state = "Not configured"
+    if GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET:
+        try:
+            response = await asyncio.to_thread(requests.get, f"{GARGAND_WEBSITE_URL}/api/bot/status", timeout=8)
+            online = bool(response.ok and response.json().get("online"))
+            bridge_state = "Website reachable · heartbeat online" if online else "Website reachable · bot heartbeat missing"
+        except (requests.RequestException, ValueError):
+            bridge_state = "Website unreachable"
+    e = embed("🔎 Gargand Diagnostics", f"Bridge: **{bridge_state}**\nBridge secret: **{'configured' if GARGAND_BRIDGE_SECRET else 'missing'}**", EMBED_COLOR)
+    e.add_field(name="Permissions", value=f"Audit log: {'✅' if perms.view_audit_log else '❌'} · Manage channels: {'✅' if perms.manage_channels else '❌'}\nManage roles: {'✅' if perms.manage_roles else '❌'} · Send messages: {'✅' if perms.send_messages else '❌'} · Embed links: {'✅' if perms.embed_links else '❌'}", inline=False)
+    e.set_footer(text="Invite Gargand with the missing permissions, then run !diagnose again.")
+    await ctx.send(embed=e)
+
+
+@bot.hybrid_command(name="official")
+@admin_only()
+async def official(ctx: commands.Context, action: str = "status", *, value: str = ""):
+    """Manage Gargand's official announcement connection."""
+    if ctx.guild.id != OFFICIAL_GUILD_ID:
+        await ctx.send("This command is only available in Gargand's official server.", delete_after=8)
+        return
+    action = action.lower().strip()
+    cfg = get_settings(ctx.guild.id)
+    if action == "status":
+        channel_id = int(cfg.get("official_announcement_channel_id") or OFFICIAL_ANNOUNCEMENT_CHANNEL_ID)
+        channel = ctx.guild.get_channel(channel_id)
+        destination = channel.mention if channel else "not configured"
+        bridge = "configured" if GARGAND_BRIDGE_SECRET else "missing secret"
+        await ctx.send(embed=embed("📣 Official Updates", f"Destination: {destination}\nWebsite bridge: {bridge}\nPublish with `!official publish Title | update details`.", EMBED_COLOR))
+        return
+    if action == "channel":
+        match = re.search(r"\d{15,22}", value)
+        channel = ctx.guild.get_channel(int(match.group())) if match else None
+        if not isinstance(channel, discord.TextChannel):
+            await ctx.send("Choose a text channel in this server: `!official channel #announcements`.", delete_after=10)
+            return
+        set_setting(ctx.guild, "official_announcement_channel_id", channel.id)
+        await ctx.send(embed=embed("✅ Update channel saved", f"Website and bot announcements will go to {channel.mention}.", SUCCESS))
+        return
+    if action == "publish":
+        parts = value.split("|", 1)
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            await ctx.send("Use `!official publish Title | announcement details`.", delete_after=10)
+            return
+        if not GARGAND_BRIDGE_SECRET:
+            await ctx.send("The website bridge secret is not configured on the bot host.", delete_after=10)
+            return
+        payload = {"title": parts[0].strip()[:180], "body": parts[1].strip()[:3500], "kind": "bot"}
+        try:
+            response = await asyncio.to_thread(requests.post, f"{GARGAND_WEBSITE_URL}/api/bot/announcements", headers={"X-Gargand-Bridge-Key": GARGAND_BRIDGE_SECRET}, json=payload, timeout=10)
+            if response.ok and response.json().get("ok"):
+                await ctx.send(embed=embed("✅ Update published", "The update is on the website and queued for the official announcements channel.", SUCCESS))
+            else:
+                await ctx.send(f"Website rejected the update ({response.status_code}). Check `!diagnose` and the shared bridge secret.", delete_after=12)
+        except (requests.RequestException, ValueError):
+            await ctx.send("I couldn't reach the website. Check `!diagnose` and try again.", delete_after=12)
+        return
+    await ctx.send("**Official server controls**\n`!official status` · `!official channel #channel` · `!official publish Title | details`", delete_after=15)
+
+
 # -----------------------------
 # Server starter templates
 # -----------------------------
@@ -5026,15 +5072,21 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
     audit_error = False
     actor = None
     try:
-        audit = [entry async for entry in guild.audit_logs(limit=8, action=ANTI_NUKE_ACTIONS[action_key])]
         target_id = int(getattr(target, "id", 0) or 0)
-        now_utc = datetime.now(timezone.utc).timestamp()
-        for entry in audit:
-            entry_target_id = int(getattr(getattr(entry, "target", None), "id", 0) or 0)
-            created_at = getattr(entry, "created_at", None)
-            age = abs(now_utc - created_at.timestamp()) if created_at else 999
-            if entry_target_id == target_id and age <= 25:
-                actor = entry.user
+        # Discord can publish audit entries a moment after the gateway event.
+        for attempt in range(2):
+            if attempt:
+                await asyncio.sleep(0.4)
+            audit = [entry async for entry in guild.audit_logs(limit=8, action=ANTI_NUKE_ACTIONS[action_key])]
+            now_utc = datetime.now(timezone.utc).timestamp()
+            for entry in audit:
+                entry_target_id = int(getattr(getattr(entry, "target", None), "id", 0) or 0)
+                created_at = getattr(entry, "created_at", None)
+                age = abs(now_utc - created_at.timestamp()) if created_at else 999
+                if entry_target_id == target_id and age <= 25:
+                    actor = entry.user
+                    break
+            if actor:
                 break
     except (discord.Forbidden, discord.HTTPException):
         audit_error = True
@@ -5087,6 +5139,11 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
         details.append(f"Changed fields: {changed}.")
     if threshold_reached:
         details.append("Configured threshold reached; staff were alerted before any optional response.")
+
+    # Count normal edits for burst detection without creating a case or a log
+    # message for every routine change. Unknown and trusted actors do not escalate.
+    if action_key.endswith("_update") and monitoring and not threshold_reached:
+        return
 
     case_id = record_moderation_case(
         guild,
@@ -5582,6 +5639,24 @@ async def handle_website_job(job):
     if not guild:
         return
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+
+    if job.get("kind") == "official_announcement":
+        if guild_id != OFFICIAL_GUILD_ID:
+            return
+        channel_id = int(get_settings(guild_id).get("official_announcement_channel_id") or OFFICIAL_ANNOUNCEMENT_CHANNEL_ID)
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            print(f"Official announcement destination {channel_id} is missing or not a text channel.")
+            return
+        title = str(payload.get("title") or "Gargand update")[:180]
+        body = str(payload.get("body") or "")[:3500]
+        announcement = embed(f"📣 {title}", body, EMBED_COLOR)
+        announcement.add_field(name="Read the update", value=str(payload.get("url") or f"{GARGAND_WEBSITE_URL}/announcements"), inline=False)
+        try:
+            await channel.send(embed=announcement, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            print(f"Official announcement delivery failed: {type(exc).__name__}")
+        return
 
     if job.get("kind") == "settings":
         current = get_settings(guild_id)
