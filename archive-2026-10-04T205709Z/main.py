@@ -5598,6 +5598,19 @@ async def collect_guild_snapshot():
             "invite_url": await build_guild_invite(guild),
             "settings": settings,
             "health": collect_guild_health(guild, settings),
+            # Publish the bot-authorized resource list through the authenticated bridge.
+            # OAuth user tokens cannot read guild channels/roles from Discord's API.
+            "channels": [
+                {"id": str(channel.id), "name": channel.name, "type": int(channel.type.value),
+                 "position": int(getattr(channel, "position", 0))}
+                for channel in guild.channels
+                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.CategoryChannel,
+                                         discord.StageChannel, discord.ForumChannel, discord.NewsChannel))
+            ],
+            "roles": [
+                {"id": str(role.id), "name": role.name, "position": int(role.position)}
+                for role in guild.roles if role.id != guild.id
+            ],
         })
     return snapshot
 
