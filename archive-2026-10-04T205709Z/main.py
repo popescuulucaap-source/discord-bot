@@ -225,6 +225,54 @@ def db_init():
             original_roles TEXT NOT NULL DEFAULT '[]'
         );
         CREATE INDEX IF NOT EXISTS idx_jails_active ON jails(guild_id, user_id, active);
+        CREATE TABLE IF NOT EXISTS moderation_cases (
+            case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL DEFAULT 'moderation_case',
+            action TEXT NOT NULL,
+            actor_id INTEGER,
+            actor_name TEXT NOT NULL,
+            target_id INTEGER,
+            target_name TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            outcome TEXT NOT NULL DEFAULT 'success',
+            details TEXT NOT NULL DEFAULT '',
+            channel_id INTEGER,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_moderation_cases_guild ON moderation_cases(guild_id, case_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_moderation_cases_target ON moderation_cases(guild_id, target_id, case_id DESC);
+        CREATE TABLE IF NOT EXISTS case_appeals (
+            appeal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            case_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            ticket_channel_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            reviewed_by INTEGER,
+            reviewed_at INTEGER,
+            decision_note TEXT NOT NULL DEFAULT '',
+            UNIQUE(guild_id, case_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_case_appeals_pending ON case_appeals(guild_id, status, appeal_id DESC);
+        CREATE TABLE IF NOT EXISTS verification_risk (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            risk_score INTEGER NOT NULL DEFAULT 0,
+            reasons TEXT NOT NULL DEFAULT '[]',
+            assessed_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS raid_lockdowns (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            previous_send_messages TEXT NOT NULL,
+            previous_send_messages_in_threads TEXT NOT NULL,
+            restore_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, channel_id)
+        );
 CREATE TABLE IF NOT EXISTS speech_counts (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -461,6 +509,62 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
         pass
 
 
+def record_moderation_case(
+    guild: discord.Guild,
+    action: str,
+    actor=None,
+    target=None,
+    reason: str = "No reason provided",
+    *,
+    outcome: str = "success",
+    details: str = "",
+    expires_at: int | None = None,
+    channel=None,
+    event_type: str = "moderation_case",
+) -> int:
+    """Persist a searchable case locally and mirror it to the website bridge."""
+    actor = actor or bot.user
+    actor_id = getattr(actor, "id", None)
+    actor_name = str(actor) if actor else "Gargand"
+    target_id = getattr(target, "id", None)
+    target_name = getattr(target, "display_name", None) or (str(target) if target else "Server")
+    created_at = utc_ts()
+    conn = db_connect()
+    cursor = conn.execute(
+        "INSERT INTO moderation_cases(guild_id,event_type,action,actor_id,actor_name,target_id,target_name,reason,outcome,details,channel_id,created_at,expires_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            guild.id, event_type[:40], action[:80], actor_id, actor_name[:120], target_id,
+            str(target_name)[:120], str(reason or "No reason provided")[:1000], outcome[:40],
+            str(details or "")[:1000], getattr(channel, "id", None), created_at, expires_at,
+        ),
+    )
+    case_id = int(cursor.lastrowid)
+    conn.commit()
+    conn.close()
+
+    metadata = {
+        "case_id": case_id,
+        "record_type": "incident" if event_type == "security_incident" else "case",
+        "action": action[:80],
+        "target_id": str(target_id) if target_id is not None else "",
+        "target_name": str(target_name)[:120],
+        "reason": str(reason or "No reason provided")[:1000],
+        "outcome": outcome[:40],
+        "details": str(details or "")[:1000],
+        "channel_id": str(getattr(channel, "id", "") or ""),
+        "expires_at": expires_at,
+    }
+    asyncio.create_task(send_telemetry(
+        event_type,
+        guild=guild,
+        user=actor,
+        command_name=action[:120],
+        metadata=metadata,
+    ))
+    return case_id
+
+
 @bot.listen("on_member_join")
 async def gargand_log_member_join(member: discord.Member):
     await log_action(member.guild, "↗ Member joined", f"**{member}** ({member.id}) joined the server.", SUCCESS)
@@ -570,6 +674,181 @@ async def emergency_lockdown(guild: discord.Guild):
                 await channel.set_permissions(guild.default_role, overwrite=ow, reason="Gargand emergency anti-nuke lockdown")
             except (discord.Forbidden, discord.HTTPException, AttributeError):
                 pass
+
+
+def _decode_overwrite_flag(value: str):
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def apply_raid_lockdown_to_channel(guild: discord.Guild, channel, restore_at: int, reason: str) -> bool:
+    conn = db_connect()
+    saved = conn.execute(
+        "SELECT 1 FROM raid_lockdowns WHERE guild_id=? AND channel_id=?",
+        (guild.id, channel.id),
+    ).fetchone()
+    if not saved:
+        previous = channel.overwrites_for(guild.default_role)
+        conn.execute(
+            "INSERT OR IGNORE INTO raid_lockdowns(guild_id,channel_id,previous_send_messages,previous_send_messages_in_threads,restore_at) VALUES(?,?,?,?,?)",
+            (guild.id, channel.id, json.dumps(previous.send_messages), json.dumps(previous.send_messages_in_threads), restore_at),
+        )
+    else:
+        conn.execute("UPDATE raid_lockdowns SET restore_at=? WHERE guild_id=? AND channel_id=?", (restore_at, guild.id, channel.id))
+    conn.commit()
+    conn.close()
+
+    overwrite = channel.overwrites_for(guild.default_role)
+    overwrite.send_messages = False
+    overwrite.send_messages_in_threads = False
+    try:
+        await channel.set_permissions(guild.default_role, overwrite=overwrite, reason=f"Gargand temporary raid lockdown: {reason[:350]}")
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        if not saved:
+            conn = db_connect()
+            conn.execute("DELETE FROM raid_lockdowns WHERE guild_id=? AND channel_id=?", (guild.id, channel.id))
+            conn.commit()
+            conn.close()
+        return False
+
+
+async def start_raid_lockdown(guild: discord.Guild, minutes: int, *, actor=None, reason="join surge"):
+    """Temporarily pause @everyone posting while keeping an exact restore snapshot."""
+    restore_at = utc_ts() + max(1, min(int(minutes), 60)) * 60
+    conn = db_connect()
+    conn.execute("UPDATE raid_lockdowns SET restore_at=? WHERE guild_id=?", (restore_at, guild.id))
+    conn.commit()
+    conn.close()
+
+    locked = 0
+    failed = 0
+    channels = [ch for ch in guild.channels if isinstance(ch, (discord.TextChannel, discord.ForumChannel))]
+    for channel in channels:
+        if await apply_raid_lockdown_to_channel(guild, channel, restore_at, reason):
+            locked += 1
+        else:
+            failed += 1
+        await asyncio.sleep(0.12)
+
+    if locked:
+        set_setting(guild, "raid_lockdown_until", restore_at)
+        set_setting(guild, "raid_lockdown_reason", str(reason)[:200])
+        case_id = record_moderation_case(
+            guild, "raid_lockdown", actor, None,
+            reason=f"Temporary posting lockdown: {reason}",
+            details=f"Locked {locked} channels; {failed} could not be changed. Automatic expiry in {minutes} minutes.",
+            expires_at=restore_at,
+        )
+        await log_action(
+            guild,
+            "🚨 Temporary raid lockdown",
+            f"@everyone posting is paused in **{locked}** channels for **{minutes} minutes**.\n**Case:** `#{case_id}`\n**Reason:** {reason}\nThe original channel permissions will be restored automatically.",
+            DANGER,
+        )
+    return locked, failed, restore_at
+
+
+async def restore_raid_lockdown_channel(guild: discord.Guild, channel_id: int) -> bool:
+    conn = db_connect()
+    saved = conn.execute(
+        "SELECT previous_send_messages,previous_send_messages_in_threads FROM raid_lockdowns WHERE guild_id=? AND channel_id=?",
+        (guild.id, channel_id),
+    ).fetchone()
+    conn.close()
+    if not saved:
+        return True
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        conn = db_connect()
+        conn.execute("DELETE FROM raid_lockdowns WHERE guild_id=? AND channel_id=?", (guild.id, channel_id))
+        conn.commit()
+        conn.close()
+        return True
+    overwrite = channel.overwrites_for(guild.default_role)
+    overwrite.send_messages = _decode_overwrite_flag(saved["previous_send_messages"])
+    overwrite.send_messages_in_threads = _decode_overwrite_flag(saved["previous_send_messages_in_threads"])
+    try:
+        await channel.set_permissions(
+            guild.default_role,
+            overwrite=None if overwrite.is_empty() else overwrite,
+            reason="Gargand raid lockdown ended; restore original permissions",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        return False
+    conn = db_connect()
+    conn.execute("DELETE FROM raid_lockdowns WHERE guild_id=? AND channel_id=?", (guild.id, channel_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+async def release_raid_lockdown(guild: discord.Guild, *, actor=None, reason="manual recovery"):
+    conn = db_connect()
+    rows = conn.execute("SELECT channel_id FROM raid_lockdowns WHERE guild_id=? ORDER BY channel_id", (guild.id,)).fetchall()
+    conn.close()
+    restored = 0
+    failed = 0
+    for row in rows:
+        if await restore_raid_lockdown_channel(guild, int(row["channel_id"])):
+            restored += 1
+        else:
+            failed += 1
+    conn = db_connect()
+    remaining = conn.execute("SELECT COUNT(*) FROM raid_lockdowns WHERE guild_id=?", (guild.id,)).fetchone()[0]
+    conn.close()
+    if not remaining:
+        set_setting(guild, "raid_lockdown_until", 0)
+        set_setting(guild, "raid_lockdown_reason", "")
+    if restored:
+        case_id = record_moderation_case(
+            guild, "raid_recovery", actor, None,
+            reason=reason,
+            details=f"Restored original posting permissions in {restored} channels; {failed} still need retry.",
+        )
+        await log_action(
+            guild,
+            "🟢 Raid lockdown recovery",
+            f"Original permissions restored in **{restored}** channels. **{failed}** channels could not be restored yet.\n**Case:** `#{case_id}`",
+            SUCCESS if not failed else WARNING,
+        )
+    return restored, failed, int(remaining)
+
+
+@tasks.loop(seconds=30)
+async def raid_lockdown_restore_watcher():
+    conn = db_connect()
+    rows = conn.execute("SELECT DISTINCT guild_id FROM raid_lockdowns WHERE restore_at<=?", (utc_ts(),)).fetchall()
+    conn.close()
+    for row in rows:
+        guild = bot.get_guild(int(row["guild_id"]))
+        if not guild:
+            continue
+        due = db_connect()
+        channels = due.execute("SELECT channel_id FROM raid_lockdowns WHERE guild_id=? AND restore_at<=?", (guild.id, utc_ts())).fetchall()
+        due.close()
+        for item in channels:
+            await restore_raid_lockdown_channel(guild, int(item["channel_id"]))
+        check = db_connect()
+        remaining = check.execute("SELECT COUNT(*) FROM raid_lockdowns WHERE guild_id=?", (guild.id,)).fetchone()[0]
+        check.close()
+        if not remaining:
+            set_setting(guild, "raid_lockdown_until", 0)
+            set_setting(guild, "raid_lockdown_reason", "")
+            case_id = record_moderation_case(
+                guild, "raid_recovery", bot.user, None,
+                reason="Automatic expiry",
+                details="The temporary raid lockdown expired and original channel permissions were restored.",
+                event_type="security_incident",
+            )
+            await log_action(guild, "🟢 Raid lockdown expired", f"Gargand restored the saved channel permissions.\n**Case:** `#{case_id}`", SUCCESS)
+
+
+@raid_lockdown_restore_watcher.before_loop
+async def before_raid_lockdown_restore_watcher():
+    await bot.wait_until_ready()
 
 
 async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type: str, answers: list[tuple[str, str]] | None = None):
@@ -753,6 +1032,7 @@ VERIFICATION_FAILURES: dict[tuple[int, int], list[float]] = {}
 VERIFICATION_LOCKED_UNTIL: dict[tuple[int, int], float] = {}
 VERIFICATION_NEXT_CHALLENGE: dict[tuple[int, int], float] = {}
 VERIFICATION_VIEW_REGISTERED = False
+CASE_APPEAL_VIEWS_REGISTERED = False
 
 
 def verification_cooldown_remaining(guild_id: int, user_id: int) -> int:
@@ -830,13 +1110,17 @@ class VerificationView(discord.ui.View):
         VERIFICATION_NEXT_CHALLENGE[key] = now + 20
 
         words = ["NIGHT", "STAR", "LUNA", "FOX", "RUNE", "NOVA", "EMBER", "CROWN", "GLORY", "SILVER", "GOLDEN", "COMET", "FROST", "RIVER", "SABLE", "AURORA", "ORBIT", "THUNDER", "PHOENIX"]
-        phrase = " ".join(secrets.choice(words) for _ in range(4)) + f" {secrets.randbelow(900) + 100}"
+        risk_score, _risk_reasons = get_verification_risk(guild.id, member.id)
+        word_count = 7 if risk_score >= 5 else 5 if risk_score >= 3 else 4
+        digits = 6 if risk_score >= 5 else 4 if risk_score >= 3 else 3
+        number = secrets.randbelow(9 * (10 ** (digits - 1))) + 10 ** (digits - 1)
+        phrase = " ".join(secrets.choice(words) for _ in range(word_count)) + f" {number}"
         await interaction.response.send_modal(VerificationModal(guild.id, member.id, phrase))
         await asyncio.sleep(0.2)
         try:
             challenge = make_challenge_image(phrase)
             await interaction.followup.send(
-                embed=embed("🔐 Private verification challenge", "Type the four words and number from the image into the popup. This challenge expires in five minutes.", INFO),
+                embed=embed("🔐 Private verification challenge", f"Type the {word_count} words and {digits}-digit number from the image into the popup. This challenge expires in five minutes.", INFO),
                 file=challenge,
                 ephemeral=True,
             )
@@ -923,6 +1207,10 @@ class VerificationModal(discord.ui.Modal, title="Verify your account"):
 
         key = (guild.id, member.id)
         VERIFICATION_FAILURES.pop(key, None)
+        conn = db_connect()
+        conn.execute("DELETE FROM verification_risk WHERE guild_id=? AND user_id=?", (guild.id, member.id))
+        conn.commit()
+        conn.close()
         VERIFICATION_LOCKED_UNTIL.pop(key, None)
         VERIFICATION_NEXT_CHALLENGE.pop(key, None)
         await interaction.followup.send("✅ Verification successful. Welcome to the server!", ephemeral=True)
@@ -994,6 +1282,122 @@ class TicketControlView(discord.ui.View):
             await interaction.channel.edit(topic=f"Claimed by {interaction.user.id}")
         except discord.HTTPException:
             pass
+
+
+class CaseAppealReviewView(discord.ui.View):
+    def __init__(self, appeal_id: int):
+        super().__init__(timeout=None)
+        self.appeal_id = int(appeal_id)
+        approve = discord.ui.Button(
+            label="Approve appeal", emoji="✅", style=discord.ButtonStyle.success,
+            custom_id=f"gargand:case-appeal:{self.appeal_id}:approve",
+        )
+        deny = discord.ui.Button(
+            label="Deny appeal", emoji="⛔", style=discord.ButtonStyle.danger,
+            custom_id=f"gargand:case-appeal:{self.appeal_id}:deny",
+        )
+        approve.callback = self.approve
+        deny.callback = self.deny
+        self.add_item(approve)
+        self.add_item(deny)
+
+    async def approve(self, interaction: discord.Interaction):
+        await self.resolve(interaction, "approved")
+
+    async def deny(self, interaction: discord.Interaction):
+        await self.resolve(interaction, "denied")
+
+    async def resolve(self, interaction: discord.Interaction, decision: str):
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("Staff only.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        conn = db_connect()
+        appeal = conn.execute("SELECT * FROM case_appeals WHERE appeal_id=?", (self.appeal_id,)).fetchone()
+        case = conn.execute("SELECT * FROM moderation_cases WHERE case_id=?", (appeal["case_id"],)).fetchone() if appeal else None
+        conn.close()
+        if not appeal or not case or appeal["guild_id"] != interaction.guild_id:
+            await interaction.followup.send("This case appeal could not be found in this server.", ephemeral=True)
+            return
+        if appeal["status"] != "pending":
+            await interaction.followup.send(f"This appeal is already {appeal['status']}.", ephemeral=True)
+            return
+
+        # Claim the review before changing warnings or timeouts so simultaneous
+        # staff clicks cannot apply the same appeal twice.
+        conn = db_connect()
+        cursor = conn.execute(
+            "UPDATE case_appeals SET status='reviewing' WHERE appeal_id=? AND status='pending'",
+            (self.appeal_id,),
+        )
+        conn.commit()
+        conn.close()
+        if cursor.rowcount != 1:
+            await interaction.followup.send("Another staff member is already reviewing this appeal.", ephemeral=True)
+            return
+
+        if decision == "approved":
+            guild = interaction.guild
+            try:
+                if case["action"] == "warn":
+                    conn = db_connect()
+                    warning = conn.execute("SELECT count FROM warnings WHERE guild_id=? AND user_id=?", (guild.id, case["target_id"])).fetchone()
+                    if warning and warning["count"] <= 1:
+                        conn.execute("DELETE FROM warnings WHERE guild_id=? AND user_id=?", (guild.id, case["target_id"]))
+                    elif warning:
+                        conn.execute("UPDATE warnings SET count=count-1 WHERE guild_id=? AND user_id=?", (guild.id, case["target_id"]))
+                    conn.commit()
+                    conn.close()
+                elif case["action"] == "timeout":
+                    member = guild.get_member(int(case["target_id"])) if case["target_id"] else None
+                    if member and member.is_timed_out() and case["expires_at"]:
+                        current_expiry = member.timed_out_until
+                        if current_expiry and abs(int(current_expiry.timestamp()) - int(case["expires_at"])) > 300:
+                            conn = db_connect()
+                            conn.execute("UPDATE case_appeals SET status='pending' WHERE appeal_id=? AND status='reviewing'", (self.appeal_id,))
+                            conn.commit()
+                            conn.close()
+                            await interaction.followup.send("The member's timeout has since changed. Review the current timeout manually before approving.", ephemeral=True)
+                            return
+                        await member.timeout(None, reason=f"Case appeal #{self.appeal_id} approved by {interaction.user}")
+            except (discord.Forbidden, discord.HTTPException):
+                conn = db_connect()
+                conn.execute("UPDATE case_appeals SET status='pending' WHERE appeal_id=? AND status='reviewing'", (self.appeal_id,))
+                conn.commit()
+                conn.close()
+                await interaction.followup.send("Gargand could not apply the approved appeal. Check role order and try again.", ephemeral=True)
+                return
+
+        conn = db_connect()
+        conn.execute(
+            "UPDATE case_appeals SET status=?,reviewed_by=?,reviewed_at=?,decision_note=? WHERE appeal_id=? AND status='reviewing'",
+            (decision, interaction.user.id, utc_ts(), f"Reviewed by {interaction.user}", self.appeal_id),
+        )
+        conn.commit()
+        conn.close()
+        target = interaction.guild.get_member(int(case["target_id"])) if case["target_id"] else None
+        case_id = record_moderation_case(
+            interaction.guild,
+            f"appeal_{decision}",
+            interaction.user,
+            target,
+            f"Appeal for case #{case['case_id']} {decision}",
+            details=f"Original action: {case['action']}; appeal ID #{self.appeal_id}.",
+            outcome=decision,
+        )
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+        await interaction.followup.send(f"Appeal {decision}. Review record: `#{case_id}`.", ephemeral=True)
+        await log_action(
+            interaction.guild,
+            "🧑‍⚖️ Case appeal reviewed",
+            f"Appeal `#{self.appeal_id}` for case `#{case['case_id']}` was **{decision}** by {interaction.user.mention}.\nReview record: `#{case_id}`.",
+            SUCCESS if decision == "approved" else WARNING,
+        )
 
     @discord.ui.button(label="Close", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="testiny:ticket:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1773,6 +2177,78 @@ def get_coins(guild_id: int, user_id: int) -> int:
 invite_cache: dict[int, dict[str, int]] = {}
 anti_nuke_events: dict[tuple[int, int, str], deque[int]] = defaultdict(deque)
 raid_mentions: dict[tuple[int, int], deque[int]] = defaultdict(deque)
+raid_join_windows: dict[int, deque[float]] = defaultdict(deque)
+raid_watch_last_alert: dict[int, float] = {}
+raid_lockdown_starting: set[int] = set()
+
+
+def record_join_speed(guild_id: int) -> int:
+    now = time.monotonic()
+    joins = raid_join_windows[guild_id]
+    joins.append(now)
+    while joins and now - joins[0] > 30:
+        joins.popleft()
+    return len(joins)
+
+
+def assess_join_risk(member: discord.Member, joins_in_window: int) -> tuple[int, list[str]]:
+    age_hours = max(0, (datetime.now(timezone.utc) - member.created_at).total_seconds() / 3600)
+    score = 0
+    reasons = []
+    if age_hours < 24:
+        score += 3
+        reasons.append("account created within 24 hours")
+    elif age_hours < 24 * 7:
+        score += 2
+        reasons.append("account created within 7 days")
+    elif age_hours < 24 * 30:
+        score += 1
+        reasons.append("account created within 30 days")
+    if joins_in_window >= 12:
+        score += 3
+        reasons.append(f"{joins_in_window} joins in 30 seconds")
+    elif joins_in_window >= 6:
+        score += 2
+        reasons.append(f"{joins_in_window} joins in 30 seconds")
+    return score, reasons
+
+
+def save_verification_risk(guild_id: int, user_id: int, score: int, reasons: list[str]):
+    conn = db_connect()
+    conn.execute(
+        "INSERT OR REPLACE INTO verification_risk(guild_id,user_id,risk_score,reasons,assessed_at) VALUES(?,?,?,?,?)",
+        (guild_id, user_id, int(score), json.dumps(reasons[:5]), utc_ts()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_verification_risk(guild_id: int, user_id: int) -> tuple[int, list[str]]:
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT risk_score,reasons,assessed_at FROM verification_risk WHERE guild_id=? AND user_id=?",
+        (guild_id, user_id),
+    ).fetchone()
+    conn.close()
+    if not row or utc_ts() - int(row["assessed_at"] or 0) > 72 * 3600:
+        return 0, []
+    try:
+        reasons = json.loads(row["reasons"] or "[]")
+    except (TypeError, ValueError):
+        reasons = []
+    return max(0, int(row["risk_score"] or 0)), reasons if isinstance(reasons, list) else []
+
+
+async def apply_automatic_raid_lockdown(guild: discord.Guild, member: discord.Member, joins: int):
+    try:
+        await start_raid_lockdown(
+            guild,
+            int(setting(guild, "raid_lockdown_minutes", 10) or 10),
+            actor=bot.user,
+            reason=f"automatic join-surge response ({joins} joins / 30s; latest member {member.id})",
+        )
+    finally:
+        raid_lockdown_starting.discard(guild.id)
 
 
 def set_invite_category(guild_id: int, user_id: int, *, j4j: bool = False):
@@ -2330,9 +2806,10 @@ class J4JTicketView(discord.ui.View):
 
 @bot.hybrid_command(name="help")
 async def help_command(ctx: commands.Context):
-    e = embed("📚 Gargand command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!lock` • `!slowmode <seconds>`\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...` • `!apeal server`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
+    e = embed("📚 Gargand command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation & cases**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!case <id>` • `!cases [@user]` • `!purge <1–100>`\n\n**Security**\n`!raidlockdown [duration]` • `!raidrelease` • staged join-surge watch and optional automatic lockdown\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / appeals / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!appeal case <id> <statement>` • `!appeal server` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
     e.add_field(name="❔ Help & questions", value="`!questions` • Get answers about Gargand, setup, logging, security, tickets, commands and the website dashboard.", inline=False)
-    e.add_field(name="🌙 New tools", value="`!purge <1–100>` • `!warnings @user` • `!clearwarnings @user` (admins) • `!announce #channel <message>` • `!poll Question | Option 1 | Option 2`", inline=False)
+    e.add_field(name="🧾 Case history", value="Successful moderation actions receive a case ID. Use `!case <id>` or `!cases [@user]`; staff can search the shared history on the website dashboard.", inline=False)
+    e.add_field(name="🌙 New tools", value="`!warnings @user` • `!clearwarnings @user` (admins) • `!announce #channel <message>` • `!poll Question | Option 1 | Option 2`", inline=False)
     e.add_field(name="✨ More to explore", value="`!8ball <question>` • `!choose a | b` • `!roll 3d8` • `!rps rock` • `!avatar` • `!userinfo` • `!serverinfo` • `!quote` • `!reverse text` • `!mock text` • `!color 8B5CF6` • `!about`", inline=False)
     e.add_field(name="🤖 AI studio", value="`!ask <question>` • `!story <idea>` • `!roast [@member]` • `!compliment [@member]` • `!riddle` • `!poem [topic]` • `!joke [topic]` • `!caption <idea>` • `!namegen <theme>` • `!quiz <topic>` • `!aiimage <description>`", inline=False)
     e.add_field(name="🧼 Counters & anti-swear", value="`!mommycount [@member]` • `!swearcount [@member]` • Admin setup: `!swearwords list/add/remove` and `!antiswear on/off/status`", inline=False)
@@ -2881,8 +3358,9 @@ async def ban(ctx: commands.Context, member: discord.Member, *, reason: str = "N
         await member.ban(reason=reason, delete_message_seconds=0)
     except discord.Forbidden:
         await ctx.send(embed=embed("❌ Ban failed", "I need the **Ban Members** permission and a role higher than the target.", DANGER)); return
-    await log_action(ctx.guild, "🔨 Member banned", f"{member.mention} was banned by {ctx.author.mention}\n**Reason:** {reason}", DANGER)
-    m = await ctx.send(embed=embed("🔨 Banned", f"{member.mention} has been banned.\n\n✨ Action logged.", DANGER))
+    case_id = record_moderation_case(ctx.guild, "ban", ctx.author, member, reason)
+    await log_action(ctx.guild, "🔨 Member banned", f"{member.mention} was banned by {ctx.author.mention}\n**Case:** `#{case_id}`\n**Reason:** {reason}", DANGER)
+    m = await ctx.send(embed=embed("🔨 Banned", f"{member.mention} has been banned.\n\n**Case:** `#{case_id}`", DANGER))
     await asyncio.sleep(5)
     try: await m.delete()
     except discord.HTTPException: pass
@@ -2898,8 +3376,9 @@ async def kick(ctx: commands.Context, member: discord.Member, *, reason: str = "
         await member.kick(reason=reason)
     except discord.Forbidden:
         await ctx.send(embed=embed("❌ Kick failed", "I need the **Kick Members** permission and a role higher than the target.", DANGER)); return
-    await log_action(ctx.guild, "👢 Member kicked", f"{member.mention} was kicked by {ctx.author.mention}\n**Reason:** {reason}", WARNING)
-    await ctx.send(embed=embed("👢 Kicked", f"{member.mention} has been kicked.", WARNING), delete_after=5)
+    case_id = record_moderation_case(ctx.guild, "kick", ctx.author, member, reason)
+    await log_action(ctx.guild, "👢 Member kicked", f"{member.mention} was kicked by {ctx.author.mention}\n**Case:** `#{case_id}`\n**Reason:** {reason}", WARNING)
+    await ctx.send(embed=embed("👢 Kicked", f"{member.mention} has been kicked.\n**Case:** `#{case_id}`", WARNING), delete_after=5)
 
 
 @bot.hybrid_command()
@@ -2912,13 +3391,15 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str = "
     count = (row["count"] if row else 0) + 1
     conn.execute("INSERT INTO warnings(guild_id,user_id,count,last_reason) VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET count=excluded.count,last_reason=excluded.last_reason", (ctx.guild.id, member.id, count, reason))
     conn.commit(); conn.close()
-    await log_action(ctx.guild, "⚠️ Warning issued", f"{member.mention} warned by {ctx.author.mention}\n**Count:** {count}/5\n**Reason:** {reason}", WARNING)
-    await ctx.send(embed=embed("⚠️ Warning", f"{member.mention} now has **{count}/5** warnings.\n\n**Reason:** {reason}", WARNING), delete_after=7)
+    case_id = record_moderation_case(ctx.guild, "warn", ctx.author, member, reason, details=f"Warning {count}/5")
+    await log_action(ctx.guild, "⚠️ Warning issued", f"{member.mention} warned by {ctx.author.mention}\n**Case:** `#{case_id}`\n**Count:** {count}/5\n**Reason:** {reason}", WARNING)
+    await ctx.send(embed=embed("⚠️ Warning", f"{member.mention} now has **{count}/5** warnings.\n\n**Case:** `#{case_id}`\n**Reason:** {reason}", WARNING), delete_after=7)
     await safe_dm(member, embed_obj=embed("⚠️ You received a warning", f"You were warned in **{ctx.guild.name}**.\n**Warning:** {count}/5\n**Reason:** {reason}", WARNING))
     if count >= 5:
         try:
             await member.kick(reason="Reached 5 warnings")
-            await ctx.send(embed=embed("👢 5 warnings reached", f"{member.mention} was kicked after reaching **5/5** warnings.", DANGER), delete_after=8)
+            kick_case = record_moderation_case(ctx.guild, "auto_kick", ctx.author, member, "Reached 5 warnings", details="Automatic escalation after warning threshold.")
+            await ctx.send(embed=embed("👢 5 warnings reached", f"{member.mention} was kicked after reaching **5/5** warnings.\n**Case:** `#{kick_case}`", DANGER), delete_after=8)
         except discord.Forbidden:
             await ctx.send(embed=embed("❌ Auto-kick failed", "I cannot kick that member; check role hierarchy and permissions.", DANGER), delete_after=8)
 
@@ -2939,8 +3420,9 @@ async def purge(ctx: commands.Context, amount: int):
         await ctx.send(embed=embed("❌ Purge failed", "Discord could not remove those messages. Try a smaller amount.", DANGER), delete_after=8)
         return
     removed = max(0, len(deleted) - 1)
-    await log_action(ctx.guild, "🧹 Messages purged", f"**{removed}** messages removed in {ctx.channel.mention} by {ctx.author.mention}.", WARNING)
-    await ctx.send(embed=embed("🧹 Channel cleaned", f"Removed **{removed}** messages.", SUCCESS), delete_after=5)
+    case_id = record_moderation_case(ctx.guild, "purge", ctx.author, None, f"Removed {removed} messages", details=f"Bulk cleanup in #{ctx.channel.name}", channel=ctx.channel)
+    await log_action(ctx.guild, "🧹 Messages purged", f"**{removed}** messages removed in {ctx.channel.mention} by {ctx.author.mention}.\n**Case:** `#{case_id}`", WARNING)
+    await ctx.send(embed=embed("🧹 Channel cleaned", f"Removed **{removed}** messages.\n**Case:** `#{case_id}`", SUCCESS), delete_after=5)
 
 
 @bot.hybrid_command(name="warnings", aliases=["warns"])
@@ -2954,6 +3436,64 @@ async def warnings_command(ctx: commands.Context, member: discord.Member):
     await ctx.send(embed=embed(f"⚠️ Warnings • {member.display_name}", f"**Active count:** {count}/5\n**Latest reason:** {reason}", WARNING if count else INFO))
 
 
+@bot.hybrid_command(name="case")
+@staff_only()
+async def moderation_case_command(ctx: commands.Context, case_id: int):
+    """Look up a Gargand moderation or security case by its ID."""
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT * FROM moderation_cases WHERE guild_id=? AND case_id=?",
+        (ctx.guild.id, case_id),
+    ).fetchone()
+    conn.close()
+    if not row:
+        await ctx.send(embed=embed("🔎 Case not found", f"There is no Gargand case `#{case_id}` in this server.", WARNING), delete_after=8)
+        return
+    target = f"{row['target_name']} (`{row['target_id']}`)" if row["target_id"] else row["target_name"]
+    description = (
+        f"**Action:** {row['action'].replace('_', ' ').title()}\n"
+        f"**Target:** {target}\n"
+        f"**Moderator:** {row['actor_name']}\n"
+        f"**Reason:** {row['reason']}\n"
+        f"**Result:** {row['outcome'].replace('_', ' ').title()}"
+    )
+    if row["details"]:
+        description += f"\n**Details:** {row['details']}"
+    if row["expires_at"]:
+        description += f"\n**Expires:** <t:{int(row['expires_at'])}:R>"
+    if row["channel_id"]:
+        description += f"\n**Channel:** <#{row['channel_id']}>"
+    await ctx.send(embed=embed(f"🛡️ Gargand case #{row['case_id']}", description, WARNING if row["outcome"] != "success" else INFO))
+
+
+@bot.hybrid_command(name="cases")
+@staff_only()
+async def moderation_cases_command(ctx: commands.Context, member: Optional[discord.Member] = None):
+    """List the latest cases, optionally filtered to one member."""
+    conn = db_connect()
+    if member:
+        rows = conn.execute(
+            "SELECT case_id,action,target_name,reason,created_at,outcome FROM moderation_cases WHERE guild_id=? AND target_id=? ORDER BY case_id DESC LIMIT 10",
+            (ctx.guild.id, member.id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT case_id,action,target_name,reason,created_at,outcome FROM moderation_cases WHERE guild_id=? ORDER BY case_id DESC LIMIT 10",
+            (ctx.guild.id,),
+        ).fetchall()
+    conn.close()
+    if not rows:
+        await ctx.send(embed=embed("🛡️ No cases yet", "Gargand has not recorded cases for this server.", INFO), delete_after=8)
+        return
+    lines = []
+    for row in rows:
+        target = row["target_name"] or "Server"
+        reason = (row["reason"] or "No reason")[:90]
+        lines.append(f"`#{row['case_id']}` **{row['action'].replace('_', ' ').title()}** · {target} · {reason}")
+    title = f"Recent cases · {member.display_name}" if member else "Recent moderation cases"
+    await ctx.send(embed=embed(title, "\n".join(lines), INFO))
+
+
 @bot.hybrid_command(name="clearwarnings", aliases=["resetwarnings"])
 @admin_only()
 async def clearwarnings(ctx: commands.Context, member: discord.Member):
@@ -2961,8 +3501,9 @@ async def clearwarnings(ctx: commands.Context, member: discord.Member):
     conn.execute("DELETE FROM warnings WHERE guild_id=? AND user_id=?", (ctx.guild.id, member.id))
     conn.commit()
     conn.close()
-    await log_action(ctx.guild, "🧽 Warnings cleared", f"All warnings for {member.mention} were cleared by {ctx.author.mention}.", INFO)
-    await ctx.send(embed=embed("🧽 Warning record cleared", f"Warnings for {member.mention} are now **0/5**.", SUCCESS), delete_after=7)
+    case_id = record_moderation_case(ctx.guild, "clear_warnings", ctx.author, member, "Warning history reset", details="The active warning count was reset.")
+    await log_action(ctx.guild, "🧽 Warnings cleared", f"All warnings for {member.mention} were cleared by {ctx.author.mention}.\n**Case:** `#{case_id}`", INFO)
+    await ctx.send(embed=embed("🧽 Warning record cleared", f"Warnings for {member.mention} are now **0/5**.\n**Case:** `#{case_id}`", SUCCESS), delete_after=7)
 
 
 @bot.hybrid_command(name="announce")
@@ -3008,8 +3549,10 @@ async def timeout(ctx: commands.Context, member: discord.Member, duration: str, 
         await member.timeout(timedelta(seconds=seconds), reason=reason)
     except discord.Forbidden:
         await ctx.send(embed=embed("❌ Timeout failed", "I need **Moderate Members** permission.", DANGER)); return
-    await log_action(ctx.guild, "🔇 Member timed out", f"{member.mention} for **{human_duration(seconds)}**\n**Reason:** {reason}", WARNING)
-    await ctx.send(embed=embed("🔇 Timed out", f"{member.mention} is timed out for **{human_duration(seconds)}**.", WARNING), delete_after=6)
+    expires_at = utc_ts() + seconds
+    case_id = record_moderation_case(ctx.guild, "timeout", ctx.author, member, reason, expires_at=expires_at, details=f"Duration: {human_duration(seconds)}")
+    await log_action(ctx.guild, "🔇 Member timed out", f"{member.mention} for **{human_duration(seconds)}**\n**Case:** `#{case_id}`\n**Reason:** {reason}", WARNING)
+    await ctx.send(embed=embed("🔇 Timed out", f"{member.mention} is timed out for **{human_duration(seconds)}**.\n**Case:** `#{case_id}`", WARNING), delete_after=6)
 
 
 @bot.hybrid_command()
@@ -3037,6 +3580,47 @@ async def unlock(ctx: commands.Context):
         await ctx.send(embed=embed("🔓 Channel unlocked", f"{ctx.channel.mention} is open again.", SUCCESS))
     except discord.Forbidden:
         await ctx.send(embed=embed("❌ Unlock failed", "I cannot edit this channel's permissions.", DANGER))
+
+
+@bot.hybrid_command(name="raidlockdown")
+@admin_only()
+async def raidlockdown_command(ctx: commands.Context, duration: str = "10m"):
+    """Temporarily pause @everyone posting; Gargand restores saved permissions automatically."""
+    try:
+        seconds = parse_duration(duration)
+    except ValueError as exc:
+        await ctx.send(embed=embed("⏱️ Invalid duration", str(exc), WARNING))
+        return
+    if seconds > 60 * 60:
+        await ctx.send(embed=embed("⏱️ Too long", "Raid lockdowns are limited to one hour so the original permissions can be restored automatically.", WARNING))
+        return
+    minutes = max(1, (seconds + 59) // 60)
+    locked, failed, restore_at = await start_raid_lockdown(
+        ctx.guild, minutes, actor=ctx.author, reason="Staff initiated lockdown",
+    )
+    if not locked:
+        await ctx.send(embed=embed("⚠️ Lockdown not applied", "Gargand could not change any channel permissions. Check Manage Channels and role position.", DANGER))
+        return
+    await ctx.send(embed=embed(
+        "🚨 Raid lockdown active",
+        f"Posting is paused in **{locked}** channels until <t:{restore_at}:R>.\n**Could not change:** {failed} channels.\nUse `!raidrelease` to restore early.",
+        DANGER,
+    ))
+
+
+@bot.hybrid_command(name="raidrelease")
+@admin_only()
+async def raidrelease_command(ctx: commands.Context):
+    """Restore the original channel permissions saved by a Gargand raid lockdown."""
+    restored, failed, remaining = await release_raid_lockdown(ctx.guild, actor=ctx.author, reason="Staff ended the raid lockdown")
+    if not restored and not remaining:
+        await ctx.send(embed=embed("🟢 No active lockdown", "Gargand has no saved raid lockdown to release.", INFO))
+        return
+    await ctx.send(embed=embed(
+        "🟢 Raid lockdown released",
+        f"Restored **{restored}** channels. **{failed}** could not be restored yet; Gargand will retry them automatically.",
+        SUCCESS if not failed else WARNING,
+    ))
 
 
 @bot.hybrid_command(name="slowmode", aliases=["slow"])
@@ -3096,16 +3680,17 @@ async def jail(ctx: commands.Context, member: discord.Member, *, reason: str = "
         await ctx.send(embed=embed("❌ Jail failed", "I could not change this member's roles. Put the bot role above the member's roles.", DANGER))
         return
 
+    case_id = record_moderation_case(guild, "jail", ctx.author, member, reason, details=f"Jail record #{jail_id}")
     await log_action(
         guild,
         "🔒 Member jailed",
-        f"{member.mention} was jailed by {ctx.author.mention}.\n**Case:** #{jail_id}\n**Reason:** {reason}",
+        f"{member.mention} was jailed by {ctx.author.mention}.\n**Case:** `#{case_id}` · jail record #{jail_id}\n**Reason:** {reason}",
         DANGER,
     )
     await ctx.send(
         embed=embed(
             "🔒 Member jailed",
-            f"{member.mention} is now in jail.\n\n**Case:** `#{jail_id}`\n**Reason:** {reason}\n\n📝 They can press **Open jail appeal** in the jail appeal channel.",
+            f"{member.mention} is now in jail.\n\n**Case:** `#{case_id}`\n**Reason:** {reason}\n\n📝 They can press **Open jail appeal** in the jail appeal channel.",
             DANGER,
         ),
         delete_after=12,
@@ -3131,13 +3716,14 @@ async def unjail(ctx: commands.Context, member: discord.Member, *, reason: str =
         await ctx.send(embed=embed("❌ Unjail failed", "I couldn't restore the member's roles.", DANGER), delete_after=6)
         return
     close_active_jail(guild.id, member.id)
+    case_id = record_moderation_case(guild, "unjail", ctx.author, member, reason, details=f"Closed jail record #{case['jail_id']}")
     await log_action(
         guild,
         "🔓 Member unjailed",
-        f"{member.mention} was unjailed by {ctx.author.mention}.\n**Case:** #{case['jail_id']}\n**Reason:** {reason}",
+        f"{member.mention} was unjailed by {ctx.author.mention}.\n**Case:** `#{case_id}` · jail record #{case['jail_id']}\n**Reason:** {reason}",
         SUCCESS,
     )
-    await ctx.send(embed=embed("🔓 Member unjailed", f"{member.mention} has been released. ✨\n\n**Case:** `#{case['jail_id']}`", SUCCESS), delete_after=8)
+    await ctx.send(embed=embed("🔓 Member unjailed", f"{member.mention} has been released. ✨\n\n**Case:** `#{case_id}`", SUCCESS), delete_after=8)
 
 
 @bot.hybrid_group(name="setup", invoke_without_command=True)
@@ -3494,6 +4080,81 @@ async def appeal_group(ctx: commands.Context):
 @admin_only()
 async def appeal_server_subcommand(ctx: commands.Context):
     await appeal_server(ctx)
+
+
+@appeal_group.command(name="case")
+@commands.guild_only()
+async def appeal_case_subcommand(ctx: commands.Context, case_id: int, *, statement: str):
+    """Open a private staff review for a warning or timeout case."""
+    if not isinstance(ctx.author, discord.Member):
+        return
+    if not 10 <= len(statement.strip()) <= 1000:
+        await ctx.send(embed=embed("📝 Add a little more detail", "A case appeal needs between 10 and 1,000 characters so staff can review it.", WARNING), delete_after=8)
+        return
+    conn = db_connect()
+    case = conn.execute(
+        "SELECT * FROM moderation_cases WHERE guild_id=? AND case_id=?",
+        (ctx.guild.id, case_id),
+    ).fetchone()
+    conn.close()
+    if not case or case["target_id"] != ctx.author.id or case["action"] not in {"warn", "timeout"} or case["event_type"] != "moderation_case":
+        await ctx.send(embed=embed("🔎 This case cannot be appealed here", "Only the member named in a warning or timeout case can open a private appeal. Ban appeals use the configured appeal server; jail cases use the jail appeal panel.", WARNING), delete_after=10)
+        return
+
+    conn = db_connect()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO case_appeals(guild_id,case_id,user_id,created_at) VALUES(?,?,?,?)",
+            (ctx.guild.id, case_id, ctx.author.id, utc_ts()),
+        )
+        appeal_id = int(cursor.lastrowid)
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        await ctx.send(embed=embed("📝 Appeal already exists", f"Case `#{case_id}` already has an appeal on record. Please continue in your existing private ticket.", INFO), delete_after=8)
+        return
+    conn.close()
+
+    channel = await create_ticket(
+        ctx.guild,
+        ctx.author,
+        "Case appeal",
+        [
+            ("Case", f"#{case_id} · {case['action']} · {case['reason']}"),
+            ("Member appeal", statement.strip()),
+        ],
+    )
+    if not channel:
+        conn = db_connect()
+        conn.execute("DELETE FROM case_appeals WHERE appeal_id=? AND status='pending'", (appeal_id,))
+        conn.commit()
+        conn.close()
+        await ctx.send(embed=embed("❌ Appeal ticket unavailable", "Gargand could not create a private review ticket. Ask a moderator to check the ticket category and bot permissions.", DANGER), delete_after=10)
+        return
+
+    conn = db_connect()
+    conn.execute("UPDATE case_appeals SET ticket_channel_id=? WHERE appeal_id=?", (channel.id, appeal_id))
+    conn.commit()
+    conn.close()
+    appeal_record = record_moderation_case(
+        ctx.guild,
+        "appeal_submitted",
+        ctx.author,
+        ctx.author,
+        f"Appeal submitted for case #{case_id}",
+        outcome="pending",
+        details=f"Private ticket #{channel.name}; appeal ID #{appeal_id}.",
+        channel=channel,
+    )
+    await channel.send(
+        embed=embed(
+            "🧑‍⚖️ Staff case review",
+            f"This private ticket is for appeal `#{appeal_id}` about case `#{case_id}`. Staff can approve or deny below. Approval removes one warning or clears the matching active timeout when it has not changed since the case was issued.",
+            INFO,
+        ),
+        view=CaseAppealReviewView(appeal_id),
+    )
+    await ctx.send(embed=embed("✅ Appeal sent privately", f"Your appeal for case `#{case_id}` is now in a private staff ticket: {channel.mention}.\nReview record: `#{appeal_record}`.", SUCCESS), delete_after=12)
 
 
 @bot.hybrid_group(name="apeal", invoke_without_command=True)
@@ -3946,7 +4607,7 @@ async def on_ready():
         await bot.tree.sync()
     except Exception as exc:
         print(f"Gargand slash-command sync failed: {exc!r}")
-    global bridge_task, VERIFICATION_VIEW_REGISTERED
+    global bridge_task, VERIFICATION_VIEW_REGISTERED, CASE_APPEAL_VIEWS_REGISTERED
     db_init()
     if not VERIFICATION_VIEW_REGISTERED:
         try:
@@ -3955,6 +4616,20 @@ async def on_ready():
             VERIFICATION_VIEW_REGISTERED = True
         except Exception as exc:
             print(f"Gargand verification panel restore failed: {type(exc).__name__}")
+    if not CASE_APPEAL_VIEWS_REGISTERED:
+        try:
+            conn = db_connect()
+            # A restart during a review should make the appeal available again.
+            conn.execute("UPDATE case_appeals SET status='pending' WHERE status='reviewing'")
+            conn.commit()
+            pending_appeals = conn.execute("SELECT appeal_id FROM case_appeals WHERE status='pending'").fetchall()
+            conn.close()
+            for appeal in pending_appeals:
+                bot.add_view(CaseAppealReviewView(int(appeal["appeal_id"])))
+            bot.add_view(TicketControlView())
+            CASE_APPEAL_VIEWS_REGISTERED = True
+        except Exception as exc:
+            print(f"Gargand case appeal buttons could not be restored: {type(exc).__name__}")
     for guild in bot.guilds:
         await cache_invites(guild)
         await ensure_log_channel(guild)
@@ -3983,6 +4658,8 @@ async def on_ready():
         await asyncio.sleep(0.25)
     if not giveaway_watcher.is_running():
         giveaway_watcher.start()
+    if not raid_lockdown_restore_watcher.is_running():
+        raid_lockdown_restore_watcher.start()
     if not nightfall_presence.is_running():
         nightfall_presence.start()
     if GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET and (bridge_task is None or bridge_task.done()):
@@ -4004,6 +4681,10 @@ async def on_guild_join(guild: discord.Guild):
 @bot.event
 async def on_guild_channel_create(channel: discord.abc.GuildChannel):
     guild = channel.guild
+    active_lockdown_until = int(setting(guild, "raid_lockdown_until", 0) or 0)
+    if active_lockdown_until > utc_ts() and isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        if not await apply_raid_lockdown_to_channel(guild, channel, active_lockdown_until, "channel created during active lockdown"):
+            await log_action(guild, "⚠️ New channel outside lockdown", f"Gargand could not pause @everyone posting in **#{channel.name}**. Check Manage Channels and role position.", WARNING)
     if setting(guild, "anti_raid", False):
         try:
             ow = channel.overwrites_for(guild.default_role)
@@ -4062,6 +4743,61 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str):
 @bot.event
 async def on_member_join(member: discord.Member):
     guild = member.guild
+    join_count = record_join_speed(guild.id)
+    if not member.bot:
+        risk_score, risk_reasons = assess_join_risk(member, join_count)
+        save_verification_risk(guild.id, member.id, risk_score, risk_reasons)
+        if risk_score >= 3 and any("account created" in item for item in risk_reasons):
+            case_id = record_moderation_case(
+                guild,
+                "verification_risk",
+                bot.user,
+                member,
+                "Automated risk review; no action taken",
+                outcome="review",
+                details=f"Risk score {risk_score}; signals: {', '.join(risk_reasons)}",
+                event_type="security_incident",
+            )
+            await log_action(
+                guild,
+                "🔎 Join risk review",
+                f"{member.mention} is held behind the normal verification gate. Gargand recorded **{len(risk_reasons)}** risk signal(s) for staff review.\n**Case:** `#{case_id}`",
+                WARNING,
+            )
+
+    if setting(guild, "anti_raid", False) and join_count >= 5:
+        now = time.monotonic()
+        if now - raid_watch_last_alert.get(guild.id, 0) >= 120:
+            raid_watch_last_alert[guild.id] = now
+            case_id = record_moderation_case(
+                guild,
+                "join_surge_watch",
+                bot.user,
+                member,
+                "Join surge watch threshold reached",
+                outcome="watch",
+                details=f"{join_count} members joined within 30 seconds; no channels were locked at this stage.",
+                event_type="security_incident",
+            )
+            await log_action(
+                guild,
+                "👀 Join surge watch",
+                f"**{join_count}** members joined in 30 seconds. Gargand is watching the surge; channels remain open.\n**Case:** `#{case_id}`",
+                WARNING,
+            )
+
+    active_lockdown_until = int(setting(guild, "raid_lockdown_until", 0) or 0)
+    if (
+        not member.bot
+        and setting(guild, "anti_raid", False)
+        and setting(guild, "raid_auto_lockdown", False)
+        and join_count >= 12
+        and active_lockdown_until <= utc_ts()
+        and guild.id not in raid_lockdown_starting
+    ):
+        raid_lockdown_starting.add(guild.id)
+        asyncio.create_task(apply_automatic_raid_lockdown(guild, member, join_count))
+
     inviter = await find_inviter(guild)
     await cache_invites(guild)
     conn = db_connect()
@@ -4086,10 +4822,6 @@ async def on_member_join(member: discord.Member):
         except (discord.Forbidden, discord.HTTPException) as exc:
             print(f"Could not assign the Unverified role in guild {guild.id}: {type(exc).__name__}")
             await log_action(guild, "⚠️ Verification setup issue", f"Could not give {member.mention} the Unverified role. Check Gargand’s Manage Roles permission and role order.", WARNING)
-        account_age_hours = max(0, (datetime.now(timezone.utc) - member.created_at).total_seconds() / 3600)
-        if account_age_hours < 24:
-            await log_action(guild, "🚩 New account joined", f"{member.mention} joined with an account created about {account_age_hours:.1f} hours ago. They still need to pass verification; staff can review if anything looks suspicious.", WARNING)
-
     welcome_id = setting(guild, "welcome_channel_id")
     if welcome_id:
         ch = guild.get_channel(welcome_id)
@@ -4217,7 +4949,8 @@ async def on_message(message: discord.Message):
         if len(q) >= 3:
             try:
                 await guild.ban(message.author, reason="Gargand anti-raid: repeated @everyone")
-                await log_action(guild, "🚨 Anti-raid ban", f"Banned {message.author.mention} for repeated `@everyone` mentions.", DANGER)
+                case_id = record_moderation_case(guild, "anti_raid_ban", bot.user, message.author, "Repeated @everyone mentions", details="Automated anti-raid enforcement.")
+                await log_action(guild, "🚨 Anti-raid ban", f"Banned {message.author.mention} for repeated `@everyone` mentions.\n**Case:** `#{case_id}`", DANGER)
                 return
             except discord.Forbidden:
                 pass
@@ -4495,7 +5228,13 @@ async def handle_website_job(job):
     elif job.get("kind") == "action":
         action = payload.get("action")
         try:
-            if action == "post_ticket_panel":
+            if action == "raid_lockdown":
+                locked, failed, restore_at = await start_raid_lockdown(guild, 10, actor=bot.user, reason="Dashboard emergency control")
+                print(f"Website requested raid lockdown for {guild_id}: locked {locked} channels, {failed} failed, expiry {restore_at}.")
+            elif action == "raid_release":
+                restored, failed, remaining = await release_raid_lockdown(guild, actor=bot.user, reason="Website dashboard recovery control")
+                print(f"Website requested raid release for {guild_id}: restored {restored} channels, {failed} failed, {remaining} remain.")
+            elif action == "post_ticket_panel":
                 channel = guild.get_channel(setting(guild, "ticket_panel_channel_id")) if setting(guild, "ticket_panel_channel_id") else None
                 if isinstance(channel, discord.TextChannel):
                     await channel.send(embed=embed("🎫 Open a Gargand ticket", "Choose a topic below and our team will be with you shortly."), view=TicketPanelView(guild.id))
