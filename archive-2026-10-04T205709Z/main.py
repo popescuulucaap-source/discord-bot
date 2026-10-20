@@ -5039,6 +5039,10 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
     except (discord.Forbidden, discord.HTTPException):
         audit_error = True
 
+    own_bot_edit = bool(action_key.endswith("_update") and actor and bot.user and actor.id == bot.user.id)
+    if own_bot_edit:
+        return
+
     window = bounded_setting_int(guild, "anti_nuke_window_seconds", 10, 5, 60)
     threshold_key, default_threshold = ANTI_NUKE_THRESHOLDS[action_key]
     threshold = bounded_setting_int(guild, threshold_key, default_threshold, 2, 10)
@@ -5051,7 +5055,7 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
     now = time.monotonic()
     count = 0
     threshold_reached = False
-    if actor and not actor.bot and monitoring and not trusted:
+    if actor and monitoring and not trusted:
         key = (guild.id, actor.id, action_key)
         q = anti_nuke_events[key]
         while q and now - q[0] > window:
@@ -5072,9 +5076,9 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
         details.append(f"Audit log actor: {actor} ({actor.id}).")
     else:
         details.append("No matching recent audit log entry was available for the changed object.")
-    if monitoring and actor and not actor.bot and trusted:
+    if monitoring and actor and trusted:
         details.append("Actor matches a trusted owner/role; threshold counting and automatic escalation were skipped.")
-    elif monitoring and actor and not actor.bot:
+    elif monitoring and actor:
         details.append(f"Observed {count} {action_label} event(s) in {window}s; threshold is {threshold}.")
     elif not monitoring:
         details.append("Anti-nuke monitoring is disabled; this operation was logged for review.")
@@ -5099,7 +5103,7 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
     await log_action(
         guild,
         "🚨 Anti-nuke security review" if monitoring else "🧾 Recovery snapshot saved",
-        f"**Action:** {action_label}\n**Object:** {getattr(target, 'name', 'unknown')} (`{target.id}`)\n**Actor:** {actor.mention if actor else 'Unknown (audit log unavailable)'}\n**Case:** `#{case_id}`\n" + (f"**Burst:** {count}/{threshold} in {window}s" if monitoring and actor and not actor.bot else "A recovery snapshot is available to administrators with `!recover <case id>`.") + "\nReview the incident in the website dashboard.",
+        f"**Action:** {action_label}\n**Object:** {getattr(target, 'name', 'unknown')} (`{target.id}`)\n**Actor:** {actor.mention if actor else 'Unknown (audit log unavailable)'}\n**Case:** `#{case_id}`\n" + (f"**Burst:** {count}/{threshold} in {window}s" if monitoring and actor and not trusted else "A recovery snapshot is available to administrators with `!recover <case id>`.") + "\nReview the incident in the website dashboard.",
         WARNING if not threshold_reached else DANGER,
     )
 
