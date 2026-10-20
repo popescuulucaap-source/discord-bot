@@ -5604,8 +5604,7 @@ async def collect_guild_snapshot():
                 {"id": str(channel.id), "name": channel.name, "type": int(channel.type.value),
                  "position": int(getattr(channel, "position", 0))}
                 for channel in guild.channels
-                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.CategoryChannel,
-                                         discord.StageChannel, discord.ForumChannel, discord.NewsChannel))
+                if int(channel.type.value) in {0, 2, 4, 5, 13, 15}
             ],
             "roles": [
                 {"id": str(role.id), "name": role.name, "position": int(role.position)}
