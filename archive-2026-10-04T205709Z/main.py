@@ -751,6 +751,35 @@ async def make_member_card_with_avatar(member: discord.Member, title: str, subti
 # Persistent-ish UI classes
 # -----------------------------
 
+VERIFICATION_FAILURES: dict[tuple[int, int], list[float]] = {}
+VERIFICATION_LOCKED_UNTIL: dict[tuple[int, int], float] = {}
+VERIFICATION_NEXT_CHALLENGE: dict[tuple[int, int], float] = {}
+VERIFICATION_VIEW_REGISTERED = False
+
+
+def verification_cooldown_remaining(guild_id: int, user_id: int) -> int:
+    key = (guild_id, user_id)
+    now = time.time()
+    until = VERIFICATION_LOCKED_UNTIL.get(key, 0)
+    if until <= now:
+        VERIFICATION_LOCKED_UNTIL.pop(key, None)
+        return 0
+    return max(1, int(until - now) + 1)
+
+
+def record_verification_failure(guild_id: int, user_id: int) -> int:
+    key = (guild_id, user_id)
+    now = time.time()
+    attempts = [stamp for stamp in VERIFICATION_FAILURES.get(key, []) if now - stamp < 900]
+    attempts.append(now)
+    if len(attempts) >= 3:
+        VERIFICATION_FAILURES.pop(key, None)
+        VERIFICATION_LOCKED_UNTIL[key] = now + 900
+        return 900
+    VERIFICATION_FAILURES[key] = attempts
+    return 0
+
+
 class AppealLinkView(discord.ui.View):
     def __init__(self, invite_url: str):
         super().__init__(timeout=None)
@@ -764,26 +793,65 @@ class VerificationView(discord.ui.View):
 
     @discord.ui.button(label="Start verification", emoji="✅", style=discord.ButtonStyle.success, custom_id="testiny:verify:start")
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = bot.get_guild(self.guild_id)
-        if not guild:
-            await interaction.response.send_message("This verification panel is no longer active.", ephemeral=True)
+        guild = interaction.guild
+        if not guild or (self.guild_id and interaction.guild_id != self.guild_id):
+            await interaction.response.send_message("Open this verification panel in its Discord server.", ephemeral=True)
             return
-        phrase = " ".join([secrets.choice(["NIGHT", "STAR", "LUNA", "FOX", "RUNE", "NOVA", "EMBER"]) for _ in range(3)]) + f" {random.randint(10, 99)}"
-        await interaction.response.send_modal(VerificationModal(self.guild_id, interaction.user.id, phrase))
+        if not setting(guild, "verification_channel_id"):
+            await interaction.response.send_message("Verification is not configured in this server yet.", ephemeral=True)
+            return
+        member = interaction.user
+        if not isinstance(member, discord.Member) or member.bot:
+            await interaction.response.send_message("Only server members can complete verification.", ephemeral=True)
+            return
+        unverified_id = setting(guild, "unverified_role_id")
+        verified_id = setting(guild, "verified_role_id")
+        unverified = guild.get_role(unverified_id) if unverified_id else None
+        verified = guild.get_role(verified_id) if verified_id else None
+        if not unverified or not verified:
+            await interaction.response.send_message("The verification roles are missing. Ask a server administrator to refresh the panel.", ephemeral=True)
+            return
+        if verified in member.roles:
+            await interaction.response.send_message("Your verification is already complete. If you still cannot access a channel, ask a moderator to review your roles.", ephemeral=True)
+            return
+        if unverified not in member.roles:
+            await interaction.response.send_message("You are not marked as waiting for verification. Ask a moderator to check the server setup.", ephemeral=True)
+            return
+
+        key = (guild.id, member.id)
+        now = time.time()
+        locked_for = verification_cooldown_remaining(guild.id, member.id)
+        if locked_for:
+            await interaction.response.send_message(f"Too many incorrect answers. Try again in about {locked_for // 60}m {locked_for % 60}s.", ephemeral=True)
+            return
+        next_start = VERIFICATION_NEXT_CHALLENGE.get(key, 0)
+        if next_start > now:
+            wait_seconds = max(1, int(next_start - now) + 1)
+            await interaction.response.send_message(f"Please wait {wait_seconds} seconds before starting another challenge.", ephemeral=True)
+            return
+        VERIFICATION_NEXT_CHALLENGE[key] = now + 20
+
+        words = ["NIGHT", "STAR", "LUNA", "FOX", "RUNE", "NOVA", "EMBER", "CROWN", "GLORY", "SILVER", "GOLDEN", "COMET", "FROST", "RIVER", "SABLE", "AURORA", "ORBIT", "THUNDER", "PHOENIX"]
+        phrase = " ".join(secrets.choice(words) for _ in range(4)) + f" {random.randint(100, 999)}"
+        await interaction.response.send_modal(VerificationModal(guild.id, member.id, phrase))
         await asyncio.sleep(0.2)
         try:
             challenge = make_challenge_image(phrase)
             await interaction.followup.send(
-                embed=embed("🔐 Verification challenge", "Type the phrase from the image into the verification popup.", INFO),
+                embed=embed("🔐 Private verification challenge", "Type the four words and number from the image into the popup. This challenge expires in five minutes.", INFO),
                 file=challenge,
                 ephemeral=True,
             )
-        except discord.HTTPException:
-            await interaction.followup.send(embed=embed("🔐 Verification challenge", f"Your challenge is: `{phrase}`", INFO), ephemeral=True)
+        except (discord.HTTPException, RuntimeError, OSError) as exc:
+            print(f"Verification challenge could not be delivered in guild {guild.id}: {type(exc).__name__}")
+            await interaction.followup.send(
+                embed=embed("⚠️ Challenge unavailable", "Gargand could not deliver the private challenge image. Please try again shortly; verification will not be skipped.", WARNING),
+                ephemeral=True,
+            )
 
 
 class VerificationModal(discord.ui.Modal, title="Verify your account"):
-    answer = discord.ui.TextInput(label="Challenge phrase", placeholder="Type the phrase shown to you", max_length=80)
+    answer = discord.ui.TextInput(label="Challenge phrase", placeholder="Type the words and number shown in the image", max_length=100)
 
     def __init__(self, guild_id: int, user_id: int, phrase: str):
         super().__init__(timeout=300)
@@ -795,28 +863,68 @@ class VerificationModal(discord.ui.Modal, title="Verify your account"):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("This verification belongs to another user.", ephemeral=True)
             return
-        if str(self.answer.value).strip().casefold() != self.phrase.casefold():
-            await interaction.response.send_message("❌ That challenge was incorrect. Press the button and start a new one.", ephemeral=True)
+        if interaction.guild_id != self.guild_id or not interaction.guild:
+            await interaction.response.send_message("Finish this challenge in the server where you started it.", ephemeral=True)
             return
-        guild = bot.get_guild(self.guild_id)
-        if not guild:
-            await interaction.response.send_message("Server unavailable.", ephemeral=True)
+        locked_for = verification_cooldown_remaining(self.guild_id, self.user_id)
+        if locked_for:
+            await interaction.response.send_message(f"Too many incorrect answers. Try again in about {locked_for // 60}m {locked_for % 60}s.", ephemeral=True)
             return
+        if not secrets.compare_digest(str(self.answer.value).strip().casefold(), self.phrase.casefold()):
+            locked_for = record_verification_failure(self.guild_id, self.user_id)
+            if locked_for:
+                message = "Three incorrect answers. Verification is paused for 15 minutes."
+            else:
+                message = "That answer was incorrect. Wait 20 seconds, then start a new challenge."
+            await interaction.response.send_message("❌ " + message, ephemeral=True)
+            return
+
+        guild = interaction.guild
         member = guild.get_member(self.user_id)
         if not member:
-            await interaction.response.send_message("Member unavailable.", ephemeral=True)
+            await interaction.response.send_message("Member unavailable. Ask a moderator to check your membership.", ephemeral=True)
             return
-        unverified = guild.get_role(setting(guild, "unverified_role_id")) if setting(guild, "unverified_role_id") else None
-        verified = guild.get_role(setting(guild, "verified_role_id")) if setting(guild, "verified_role_id") else None
+        unverified_id = setting(guild, "unverified_role_id")
+        verified_id = setting(guild, "verified_role_id")
+        unverified = guild.get_role(unverified_id) if unverified_id else None
+        verified = guild.get_role(verified_id) if verified_id else None
+        if not unverified or not verified:
+            await interaction.response.send_message("The verification roles are missing. Ask a server administrator to refresh the panel.", ephemeral=True)
+            return
+        if verified in member.roles:
+            await interaction.response.send_message("Your verification is already complete.", ephemeral=True)
+            return
+        if unverified not in member.roles:
+            await interaction.response.send_message("You are no longer marked as waiting for verification. Ask a moderator to review your roles.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        autorole_id = setting(guild, "autorole_id")
+        autorole = guild.get_role(autorole_id) if autorole_id else None
+        roles_to_add = []
+        for role in (verified, autorole):
+            if role and role not in member.roles and role not in roles_to_add:
+                roles_to_add.append(role)
         try:
-            if unverified and unverified in member.roles:
-                await member.remove_roles(unverified, reason="Verification completed")
-            if verified and verified not in member.roles:
-                await member.add_roles(verified, reason="Verification completed")
-            await interaction.response.send_message("✅ Verification successful. Welcome to the server!", ephemeral=True)
-            await log_action(guild, "✅ Verification completed", f"{member.mention} passed verification.", SUCCESS)
-        except discord.Forbidden:
-            await interaction.response.send_message("I do not have permission to manage the verification roles.", ephemeral=True)
+            if roles_to_add:
+                await member.add_roles(*roles_to_add, reason="Gargand verification completed")
+            await member.remove_roles(unverified, reason="Gargand verification completed")
+        except discord.HTTPException as exc:
+            try:
+                await member.remove_roles(verified, reason="Verification role update failed")
+            except discord.HTTPException:
+                pass
+            print(f"Verification role update failed in guild {guild.id}: {type(exc).__name__}")
+            await interaction.followup.send("Gargand could not finish updating your roles. Your access remains restricted; ask a moderator for help.", ephemeral=True)
+            return
+
+        key = (guild.id, member.id)
+        VERIFICATION_FAILURES.pop(key, None)
+        VERIFICATION_LOCKED_UNTIL.pop(key, None)
+        VERIFICATION_NEXT_CHALLENGE.pop(key, None)
+        await interaction.followup.send("✅ Verification successful. Welcome to the server!", ephemeral=True)
+        await log_action(guild, "✅ Verification completed", f"{member.mention} passed the private challenge.", SUCCESS)
+
 
 
 class TicketTypeSelect(discord.ui.Select):
@@ -2148,7 +2256,7 @@ async def post_verification_panel(guild: discord.Guild):
         await channel.set_permissions(verified, view_channel=False)
     except (discord.Forbidden, discord.HTTPException):
         pass
-    e = embed("🔐 Welcome verification", "Press the button below to start a quick verification challenge.\n\nYour challenge is private and changes every time. ✨", EMBED_COLOR)
+    e = embed("🔐 Welcome verification", "Press the button below to start a private phrase challenge. Each challenge expires after five minutes; three incorrect answers trigger a 15-minute cooldown. ✨\n\nTo gate the rest of your server, set the Unverified role to read-only in your regular channels.", EMBED_COLOR)
     try:
         await channel.send(embed=e, view=VerificationView(guild.id))
     except discord.HTTPException:
@@ -3834,8 +3942,15 @@ async def on_ready():
         await bot.tree.sync()
     except Exception as exc:
         print(f"Gargand slash-command sync failed: {exc!r}")
-    global bridge_task
+    global bridge_task, VERIFICATION_VIEW_REGISTERED
     db_init()
+    if not VERIFICATION_VIEW_REGISTERED:
+        try:
+            # The generic persistent view routes old panels by interaction.guild after a restart.
+            bot.add_view(VerificationView(0))
+            VERIFICATION_VIEW_REGISTERED = True
+        except Exception as exc:
+            print(f"Gargand verification panel restore failed: {type(exc).__name__}")
     for guild in bot.guilds:
         await cache_invites(guild)
         await ensure_log_channel(guild)
@@ -3953,16 +4068,23 @@ async def on_member_join(member: discord.Member):
     conn.commit(); conn.close()
 
     autorole_id = setting(guild, "autorole_id")
-    if autorole_id:
+    verification_enabled = bool(setting(guild, "verification_channel_id"))
+    if autorole_id and (not verification_enabled or member.bot):
         role = guild.get_role(autorole_id)
         if role:
             try: await member.add_roles(role, reason="Gargand auto role")
-            except discord.Forbidden: pass
+            except (discord.Forbidden, discord.HTTPException): pass
 
-    if setting(guild, "verification_channel_id"):
-        unverified, _ = await configure_verification_roles(guild)
-        try: await member.add_roles(unverified, reason="Gargand verification")
-        except discord.Forbidden: pass
+    if verification_enabled and not member.bot:
+        try:
+            unverified, _ = await configure_verification_roles(guild)
+            await member.add_roles(unverified, reason="Gargand verification pending")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            print(f"Could not assign the Unverified role in guild {guild.id}: {type(exc).__name__}")
+            await log_action(guild, "⚠️ Verification setup issue", f"Could not give {member.mention} the Unverified role. Check Gargand’s Manage Roles permission and role order.", WARNING)
+        account_age_hours = max(0, (datetime.now(timezone.utc) - member.created_at).total_seconds() / 3600)
+        if account_age_hours < 24:
+            await log_action(guild, "🚩 New account joined", f"{member.mention} joined with an account created about {account_age_hours:.1f} hours ago. They still need to pass verification; staff can review if anything looks suspicious.", WARNING)
 
     welcome_id = setting(guild, "welcome_channel_id")
     if welcome_id:
