@@ -908,14 +908,28 @@ def make_challenge_image(phrase: str) -> discord.File:
     for x in range(0, 900, 30):
         draw.line((x, 0, x + 260, 300), fill=(55, 47 + (x // 30) % 20, 90), width=3)
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 46)
+        font_path = "DejaVuSans-Bold.ttf"
         small = ImageFont.truetype("DejaVuSans.ttf", 22)
     except Exception:
-        font = ImageFont.load_default(); small = ImageFont.load_default()
+        font_path = None
+        small = ImageFont.load_default()
     draw.text((42, 38), "GARGAND VERIFICATION", font=small, fill=(180, 175, 215))
-    bbox = draw.textbbox((0, 0), phrase, font=font)
-    tw = bbox[2] - bbox[0]
-    draw.text(((900 - tw) / 2, 115), phrase, font=font, fill=(246, 244, 255))
+    words = phrase.split()
+    split_at = max(1, (len(words) + 1) // 2)
+    lines = [" ".join(words[:split_at]), " ".join(words[split_at:])]
+    if font_path:
+        font = ImageFont.truetype(font_path, 46)
+        for size in range(46, 25, -2):
+            candidate = ImageFont.truetype(font_path, size)
+            if all(draw.textbbox((0, 0), line, font=candidate)[2] <= 820 for line in lines):
+                font = candidate
+                break
+    else:
+        font = ImageFont.load_default()
+    for line, y in zip(lines, (96, 158)):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw = bbox[2] - bbox[0]
+        draw.text(((900 - tw) / 2, y), line, font=font, fill=(246, 244, 255))
     draw.text((42, 254), "This challenge is private and changes every attempt.", font=small, fill=(155, 160, 180))
     out = io.BytesIO(); img.save(out, "PNG"); out.seek(0)
     return discord.File(out, filename="verification.png")
