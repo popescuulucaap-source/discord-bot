@@ -5686,6 +5686,7 @@ async def handle_website_job(job):
         # Convert dashboard resource IDs to integers before storing them. Discord.py
         # expects integer IDs; leaving select values as strings breaks channel/role lookups.
         clear_keys = set()
+        invalid_keys = set()
         for key, value in list(payload.items()):
             if value is None or value == "":
                 clear_keys.add(key)
@@ -5696,13 +5697,13 @@ async def handle_website_job(job):
                     resource_id = int(value)
                 except (TypeError, ValueError):
                     print(f"Website setting {key!r} ignored for guild {guild_id}: invalid channel ID.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                     continue
                 channel = guild.get_channel(resource_id)
                 expected = discord.CategoryChannel if key.endswith("_category_id") else discord.TextChannel
                 if not isinstance(channel, expected):
                     print(f"Website setting {key!r} ignored for guild {guild_id}: channel not found or wrong type.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                 else:
                     payload[key] = channel.id
             elif key.endswith("_role_id"):
@@ -5710,11 +5711,11 @@ async def handle_website_job(job):
                     resource_id = int(value)
                 except (TypeError, ValueError):
                     print(f"Website setting {key!r} ignored for guild {guild_id}: invalid role ID.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                     continue
                 if guild.get_role(resource_id) is None:
                     print(f"Website setting {key!r} ignored for guild {guild_id}: role not found.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                 else:
                     payload[key] = resource_id
             elif key == "appeal_server_id":
@@ -5722,7 +5723,7 @@ async def handle_website_job(job):
                     payload[key] = int(str(value).strip())
                 except (TypeError, ValueError):
                     print(f"Website appeal server ID ignored for guild {guild_id}: invalid server ID.")
-                    payload[key] = None
+                    invalid_keys.add(key)
             elif key == "anti_nuke_trusted_role_ids":
                 if not isinstance(value, list):
                     payload[key] = []
@@ -5736,6 +5737,9 @@ async def handle_website_job(job):
                         if guild.get_role(role_id) is not None:
                             trusted_ids.append(role_id)
                     payload[key] = trusted_ids
+        # Invalid/stale dashboard resource IDs must not overwrite a working saved value.
+        for key in invalid_keys:
+            payload.pop(key, None)
         previous_anti_raid = bool(current.get("anti_raid", False))
         current.update(payload)
         for key in clear_keys:
