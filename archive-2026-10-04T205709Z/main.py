@@ -1118,11 +1118,20 @@ async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type:
         EMBED_COLOR,
     )
     ticket_embed.set_thumbnail(url=user.display_avatar.url)
-    await channel.send(embed=ticket_embed, view=TicketControlView())
-    if staff_role:
-        await channel.send(content=staff_role.mention, allowed_mentions=discord.AllowedMentions(roles=True))
-    if ticket_type.lower() == "claim":
-        await channel.send(embed=embed("📸 Proof required", f"{user.mention}, please upload a clear photo/screenshot of your claim here. Staff can use `!proof please` after you post it.", WARNING))
+    try:
+        await channel.send(embed=ticket_embed, view=TicketControlView())
+        if staff_role:
+            await channel.send(content=staff_role.mention, allowed_mentions=discord.AllowedMentions(roles=True))
+        if ticket_type.lower() == "claim":
+            await channel.send(embed=embed("📸 Proof required", f"{user.mention}, please upload a clear photo/screenshot of your claim here. Staff can use `!proof please` after you post it.", WARNING))
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        # Do not leave an inaccessible or half-initialized private ticket behind.
+        try:
+            await channel.delete(reason="Gargand ticket initialization failed")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        print(f"Ticket initialization failed in guild {guild.id}: {type(exc).__name__}")
+        return None
     asyncio.create_task(send_telemetry(
         "ticket_created",
         guild=guild,
@@ -5351,6 +5360,11 @@ async def detect_destructive_action(guild: discord.Guild, action_key: str, targe
 @bot.event
 async def on_member_join(member: discord.Member):
     guild = member.guild
+    # Aggregate lifecycle telemetry contains no message content or invite token.
+    asyncio.create_task(send_telemetry(
+        "member_joined", guild=guild, user=member,
+        metadata={"is_bot": bool(member.bot)},
+    ))
     join_count = record_join_speed(guild.id)
     if not member.bot:
         risk_score, risk_reasons = assess_join_risk(member, join_count)
@@ -5468,6 +5482,10 @@ async def j4j_timeout_task(guild_id: int, user_id: int):
 @bot.event
 async def on_member_remove(member: discord.Member):
     guild = member.guild
+    asyncio.create_task(send_telemetry(
+        "member_left", guild=guild, user=member,
+        metadata={"is_bot": bool(member.bot)},
+    ))
     conn = db_connect(); conn.execute("UPDATE invite_members SET category='left',left_at=? WHERE guild_id=? AND invited_user_id=? AND category!='j4j'", (utc_ts(), guild.id, member.id)); conn.commit(); conn.close()
     leave_id = setting(guild, "leave_channel_id")
     if leave_id:
