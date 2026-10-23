@@ -5661,6 +5661,9 @@ async def handle_website_job(job):
         if not isinstance(channel, discord.TextChannel):
             print(f"Official announcement destination {channel_id} is missing or not a text channel.")
             return
+        # Ignore legacy queued website-update jobs; only bot release notes are posted.
+        if str(payload.get("kind") or "bot").strip().lower() != "bot":
+            return
         title = str(payload.get("title") or "Gargand update")[:180]
         body = str(payload.get("body") or "")[:3500]
         announcement = embed(f"📣 {title}", body, EMBED_COLOR)
