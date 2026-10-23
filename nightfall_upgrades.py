@@ -224,7 +224,7 @@ def install(main):
             return
         await ctx.send(f"Your suggestion was sent to {channel.mention}.")
 
-        @bot.hybrid_command(name="serverstats", description="Show server activity and member statistics.")
+    @bot.hybrid_command(name="serverstats", description="Show server activity and member statistics.")
     @main.commands.guild_only()
     async def serverstats(ctx):
         guild = ctx.guild
