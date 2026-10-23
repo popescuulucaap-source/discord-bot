@@ -4154,7 +4154,7 @@ async def antispam_command(ctx: commands.Context, enabled: Optional[bool] = None
     if not ctx.guild:
         return
     if enabled is None:
-        enabled = bool(setting(ctx.guild, "anti_spam", False))
+        enabled = bool(setting(ctx.guild, "automod_spam", setting(ctx.guild, "anti_spam", False)))
         state = "enabled" if enabled else "disabled"
         await ctx.send(embed=embed("🛡️ Anti-spam status", f"Anti-spam is currently **{state}**. Use `!antispam true` or `!antispam false` to change it.", INFO))
         return
