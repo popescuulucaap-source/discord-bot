@@ -1082,7 +1082,8 @@ async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type:
     # the panel or submits a modal twice. Closed tickets are deliberately excluded.
     existing = next(
         (ch for ch in guild.text_channels
-         if (ch.topic or "").startswith(marker) and not ch.name.startswith("closed-")),
+         if ((ch.topic or "") == marker or (ch.topic or "").startswith(marker + ";"))
+         and not ch.name.startswith("closed-")),
         None,
     )
     if existing:
