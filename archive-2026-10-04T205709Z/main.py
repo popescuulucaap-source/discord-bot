@@ -5934,6 +5934,12 @@ async def handle_website_job(job):
             conn.commit()
             conn.close()
         save_settings(guild_id, current)
+        asyncio.create_task(send_telemetry(
+            "settings_updated",
+            guild=guild,
+            user=bot.user,
+            metadata={"setting_keys": sorted(str(key) for key in payload.keys())[:80]},
+        ))
         await refresh_setup_dashboard(guild)
         return
 
@@ -5965,8 +5971,20 @@ async def handle_website_job(job):
                     set_setting(guild, "jail_enabled", False)
                 else:
                     await configure_jail_system(guild)
+            asyncio.create_task(send_telemetry(
+                "dashboard_action",
+                guild=guild,
+                user=bot.user,
+                metadata={"action": str(action or "")[:80], "result": "success"},
+            ))
             await refresh_setup_dashboard(guild)
         except (discord.Forbidden, discord.HTTPException, ValueError) as exc:
+            asyncio.create_task(send_telemetry(
+                "dashboard_action",
+                guild=guild,
+                user=bot.user,
+                metadata={"action": str(action or "")[:80], "result": "failed", "error_type": type(exc).__name__},
+            ))
             print(f"Website action {action!r} failed for guild {guild_id}: {type(exc).__name__}")
 
 
