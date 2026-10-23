@@ -4046,10 +4046,17 @@ async def setup_status(ctx: commands.Context):
             response = await asyncio.to_thread(
                 requests.get, f"{GARGAND_WEBSITE_URL}/api/bot/status", timeout=6
             )
-            if response.ok and response.json().get("online"):
-                bridge_state = "✅ website reachable"
+            if response.ok:
+                status = response.json()
+                if status.get("online"):
+                    age = status.get("last_seen_age_seconds")
+                    guilds = status.get("guild_count", "?")
+                    freshness = f"{age}s ago" if isinstance(age, int) else "recently"
+                    bridge_state = f"✅ online · heartbeat {freshness} · {guilds} servers"
+                else:
+                    bridge_state = "⚠️ website reachable, bot heartbeat missing"
             else:
-                bridge_state = "⚠️ website reachable, heartbeat not confirmed"
+                bridge_state = "⚠️ website returned an error"
         except (requests.RequestException, ValueError):
             bridge_state = "❌ website unreachable"
     def channel_label(key):
@@ -4080,8 +4087,15 @@ async def diagnose(ctx: commands.Context):
     if GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET:
         try:
             response = await asyncio.to_thread(requests.get, f"{GARGAND_WEBSITE_URL}/api/bot/status", timeout=8)
-            online = bool(response.ok and response.json().get("online"))
-            bridge_state = "Website reachable · heartbeat online" if online else "Website reachable · bot heartbeat missing"
+            status = response.json() if response.ok else {}
+            online = bool(status.get("online"))
+            age = status.get("last_seen_age_seconds")
+            guilds = status.get("guild_count", "?")
+            freshness = f"{age}s ago" if isinstance(age, int) else "unknown age"
+            bridge_state = (
+                f"Website reachable · heartbeat {freshness} · {guilds} servers"
+                if online else "Website reachable · bot heartbeat missing"
+            )
         except (requests.RequestException, ValueError):
             bridge_state = "Website unreachable"
     e = embed("🔎 Gargand Diagnostics", f"Bridge: **{bridge_state}**\nBridge secret: **{'configured' if GARGAND_BRIDGE_SECRET else 'missing'}**", EMBED_COLOR)
