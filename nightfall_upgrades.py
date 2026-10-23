@@ -214,29 +214,7 @@ def install(main):
             return
         await ctx.send(f"Your suggestion was sent to {channel.mention}.")
 
-    @bot.hybrid_command(name="poll", description="Create a community poll with up to five options.")
-    @main.commands.guild_only()
-    @main.staff_only()
-    async def poll(ctx, question: str, option1: str, option2: str, option3: str = "", option4: str = "", option5: str = ""):
-        options = [str(option).strip()[:180] for option in (option1, option2, option3, option4, option5) if str(option or "").strip()]
-        question = str(question or "").strip()[:240]
-        if len(options) < 2:
-            await ctx.send("A poll needs at least two options.")
-            return
-        if len(set(option.casefold() for option in options)) != len(options):
-            await ctx.send("Each poll option must be different.")
-            return
-        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
-        card = embed("📊 " + (question or "Community poll"), "\n".join(f"{emojis[i]}  {option}" for i, option in enumerate(options)), main.INFO)
-        card.set_footer(text=f"GARGAND • Poll by {ctx.author.display_name} • React to vote")
-        message = await ctx.send(embed=card)
-        for emoji in emojis[:len(options)]:
-            try:
-                await message.add_reaction(emoji)
-            except main.discord.HTTPException:
-                break
-
-    @bot.hybrid_command(name="serverstats", description="Show server activity and member statistics.")
+        @bot.hybrid_command(name="serverstats", description="Show server activity and member statistics.")
     @main.commands.guild_only()
     async def serverstats(ctx):
         guild = ctx.guild
