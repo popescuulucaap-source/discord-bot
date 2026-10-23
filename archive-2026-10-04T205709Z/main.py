@@ -1126,10 +1126,12 @@ async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type:
         "ticket_created",
         guild=guild,
         user=user,
+        # Keep analytics metadata minimal; ticket answers can contain private
+        # information and belong in the private ticket channel, not telemetry.
         metadata={
             "ticket_type": str(ticket_type)[:80],
             "channel_id": channel.id,
-            "answers": [{"question": str(q)[:300], "answer": str(a)[:1000]} for q, a in (answers or [])][:5],
+            "question_count": min(len(answers or []), 5),
         },
     ))
     return channel
