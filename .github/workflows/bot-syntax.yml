@@ -1,0 +1,29 @@
+name: Bot syntax check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "archive-2026-10-04T205709Z/main.py"
+      - ".github/workflows/bot-syntax.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "archive-2026-10-04T205709Z/main.py"
+      - ".github/workflows/bot-syntax.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile bot source
+        run: python -m py_compile archive-2026-10-04T205709Z/main.py
