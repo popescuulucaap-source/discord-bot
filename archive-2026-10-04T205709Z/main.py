@@ -4026,6 +4026,50 @@ async def setup(ctx: commands.Context):
         pass
 
 
+@setup.command(name="status")
+@admin_only()
+async def setup_status(ctx: commands.Context):
+    """Show a quick, read-only check of this server's saved Gargand setup."""
+    if not ctx.guild:
+        return
+    cfg = get_settings(ctx.guild.id)
+    db_state = "✅ reachable"
+    try:
+        conn = db_connect()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+    except sqlite3.Error:
+        db_state = "❌ unavailable"
+    bridge_state = "⚪ not configured"
+    if GARGAND_WEBSITE_URL and GARGAND_BRIDGE_SECRET:
+        try:
+            response = await asyncio.to_thread(
+                requests.get, f"{GARGAND_WEBSITE_URL}/api/bot/status", timeout=6
+            )
+            if response.ok and response.json().get("online"):
+                bridge_state = "✅ website reachable"
+            else:
+                bridge_state = "⚠️ website reachable, heartbeat not confirmed"
+        except (requests.RequestException, ValueError):
+            bridge_state = "❌ website unreachable"
+    def channel_label(key):
+        raw_id = cfg.get(key)
+        channel = ctx.guild.get_channel(int(raw_id)) if str(raw_id or "").isdigit() else None
+        return channel.mention if channel else "not set"
+    e = embed(
+        "🔎 GARGAND • Setup Status",
+        f"**Database:** {db_state}\n**Website bridge:** {bridge_state}\n"
+        f"**Prefix:** `{cfg.get('prefix', PREFIX)}`\n"
+        f"**Logs:** {channel_label('logs_channel_id')}\n"
+        f"**Welcome:** {channel_label('welcome_channel_id')}\n"
+        f"**Tickets:** {channel_label('ticket_panel_channel_id')}\n"
+        f"**Verification:** {channel_label('verification_channel_id')}\n\n"
+        "This check is read-only. Use `!setup` to open the setup dashboard or `!setup templates` to add a starter layout.",
+        INFO,
+    )
+    await ctx.send(embed=e)
+
+
 @bot.hybrid_command(name="diagnose")
 @admin_only()
 async def diagnose(ctx: commands.Context):
