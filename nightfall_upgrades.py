@@ -286,7 +286,21 @@ def install(main):
         }
         contents = main.json.dumps(safe_payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
         file_obj = main.discord.File(main.io.BytesIO(contents), filename=f"gargand-config-{ctx.guild.id}.json")
-        await ctx.send("Configuration backup created. Keep this file private because it contains server IDs and settings.", file=file_obj)
+        if getattr(ctx, "interaction", None):
+            await ctx.send(
+                "Configuration backup created. Keep this file private because it contains server IDs and settings.",
+                file=file_obj,
+                ephemeral=True,
+            )
+        else:
+            try:
+                await ctx.author.send(
+                    "Your Gargand configuration backup is attached. Keep this file private because it contains server IDs and settings.",
+                    file=file_obj,
+                )
+                await ctx.send("I sent your configuration backup to your DMs.")
+            except (main.discord.Forbidden, main.discord.HTTPException):
+                await ctx.send("I couldn't DM the backup. Enable server-member DMs and run the command again so the private configuration isn't posted publicly.")
 
 
 
