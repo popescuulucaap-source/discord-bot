@@ -4263,14 +4263,18 @@ async def configbackup_command(ctx: commands.Context):
     }
     payload = json.dumps(backup, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
     if len(payload) > 7_500_000:
-        await ctx.send(embed=embed("❌ Backup too large", "This configuration is too large to attach safely. Remove excessive ticket questions or options and try again.", DANGER), ephemeral=True)
+        message = embed("❌ Backup too large", "This configuration is too large to attach safely. Remove excessive ticket questions or options and try again.", DANGER)
+        if ctx.interaction:
+            await ctx.send(embed=message, ephemeral=True)
+        else:
+            await ctx.send(embed=message)
         return
     attachment = discord.File(io.BytesIO(payload), filename=f"gargand-config-{ctx.guild.id}.json")
-    await ctx.send(
-        embed=embed("📦 Gargand configuration backup", "Your server settings are attached as JSON. Keep this file private: it may include channel/role IDs and an appeal invite URL.", SUCCESS),
-        file=attachment,
-        ephemeral=True,
-    )
+    message = embed("📦 Gargand configuration backup", "Your server settings are attached as JSON. Keep this file private: it may include channel/role IDs and an appeal invite URL.", SUCCESS)
+    if ctx.interaction:
+        await ctx.send(embed=message, file=attachment, ephemeral=True)
+    else:
+        await ctx.send(embed=message, file=attachment)
 
 
 @bot.hybrid_command(name="diagnose")
