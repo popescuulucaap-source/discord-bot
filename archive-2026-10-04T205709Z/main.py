@@ -3716,6 +3716,7 @@ async def kick(ctx: commands.Context, member: discord.Member, *, reason: str = "
 
 
 @bot.hybrid_command(name="report")
+@commands.cooldown(1, 30, commands.BucketType.user)
 async def report_member(ctx: commands.Context, member: discord.Member, *, reason: str):
     """Submit a report privately to staff."""
     is_interaction = ctx.interaction is not None
@@ -4160,7 +4161,7 @@ async def antispam_command(ctx: commands.Context, enabled: Optional[bool] = None
         return
     set_setting(ctx.guild, "anti_spam", bool(enabled))
     set_setting(ctx.guild, "automod_spam", bool(enabled))
-    await ctx.send(embed=embed("🛡️ Anti-spam updated", f"Burst-spam protection is now **{'enabled' if enabled else 'disabled'}**. When enabled, Gargand checks for 6 messages within 8 seconds and applies a short timeout to non-staff members.", SUCCESS))
+    await ctx.send(embed=embed("🛡️ Anti-spam updated", f"Burst-spam protection is now **{'enabled' if enabled else 'disabled'}**. When enabled, Gargand uses the spam threshold configured in the dashboard and may apply a short timeout to non-staff members.", SUCCESS))
 
 
 @bot.hybrid_group(name="setup", invoke_without_command=True)
