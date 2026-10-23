@@ -4247,6 +4247,32 @@ async def setup_status(ctx: commands.Context):
     await ctx.send(embed=e)
 
 
+@bot.hybrid_command(name="configbackup")
+@admin_only()
+async def configbackup_command(ctx: commands.Context):
+    """Export this server's Gargand settings to a JSON attachment."""
+    settings = get_settings(ctx.guild.id)
+    backup = {
+        "product": "Gargand",
+        "schema_version": 1,
+        "guild_id": str(ctx.guild.id),
+        "guild_name": ctx.guild.name[:100],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "settings": settings,
+        "note": "Contains server configuration only, not bot tokens or database records. Review invite URLs and IDs before sharing.",
+    }
+    payload = json.dumps(backup, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+    if len(payload) > 7_500_000:
+        await ctx.send(embed=embed("❌ Backup too large", "This configuration is too large to attach safely. Remove excessive ticket questions or options and try again.", DANGER), ephemeral=True)
+        return
+    attachment = discord.File(io.BytesIO(payload), filename=f"gargand-config-{ctx.guild.id}.json")
+    await ctx.send(
+        embed=embed("📦 Gargand configuration backup", "Your server settings are attached as JSON. Keep this file private: it may include channel/role IDs and an appeal invite URL.", SUCCESS),
+        file=attachment,
+        ephemeral=True,
+    )
+
+
 @bot.hybrid_command(name="diagnose")
 @admin_only()
 async def diagnose(ctx: commands.Context):
