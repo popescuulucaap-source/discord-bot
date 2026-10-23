@@ -44,7 +44,7 @@ if not TOKEN:
     raise RuntimeError("Set DISCORD_TOKEN (or BOT_TOKEN) in your Fadehost environment variables.")
 
 PREFIX = "!"
-GARGAND_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "https://testiny-7wuu.onrender.com").strip().rstrip("/")
+GARGAND_WEBSITE_URL = (os.getenv("GARGAND_WEBSITE_URL") or os.getenv("NIGHTFALL_WEBSITE_URL") or "https://gargand-bot.onrender.com").strip().rstrip("/")
 GARGAND_BRIDGE_SECRET = (os.getenv("GARGAND_BRIDGE_SECRET") or os.getenv("NIGHTFALL_BRIDGE_SECRET") or "").strip()
 BRIDGE_POLL_SECONDS = 10
 bridge_task = None
