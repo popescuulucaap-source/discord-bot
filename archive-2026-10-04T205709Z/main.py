@@ -83,10 +83,17 @@ AI_TEXT_LOCK = asyncio.Lock()
 
 
 async def command_prefix_for(message_bot, message):
-    """Keep the dashboard prefix and the live command parser in sync."""
+    """Return the configured prefix for features that inspect message text."""
     if message.guild is None:
         return PREFIX
     return str(setting(message.guild, "prefix", PREFIX))
+
+
+async def command_prefixes_for(message_bot, message):
+    """Accept the configured prefix and preserve ! as a backwards-compatible prefix."""
+    configured = await command_prefix_for(message_bot, message)
+    # discord.py supports a list of prefixes from an async prefix callback.
+    return list(dict.fromkeys(prefix for prefix in (configured, PREFIX) if prefix))
 
 
 def make_bot_invite() -> str:
@@ -116,7 +123,7 @@ INTENTS.members = True
 INTENTS.presences = False
 
 bot = commands.Bot(
-    command_prefix=command_prefix_for,
+    command_prefix=command_prefixes_for,
     intents=INTENTS,
     help_command=None,
     case_insensitive=True,
