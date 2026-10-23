@@ -4187,6 +4187,18 @@ SERVER_TEMPLATE_RULES = [
 async def apply_server_template(guild: discord.Guild, template_key: str) -> dict:
     """Add a starter layout without deleting or renaming any existing server content."""
     template = SERVER_TEMPLATE_DATA[template_key]
+    # Check permissions before making any changes so a misconfigured bot does not
+    # leave a half-created template behind.
+    me = guild.me
+    if me is None:
+        raise RuntimeError("I could not verify my server permissions. Try again in a moment.")
+    missing = []
+    if not me.guild_permissions.manage_roles:
+        missing.append("Manage Roles")
+    if not me.guild_permissions.manage_channels:
+        missing.append("Manage Channels")
+    if missing:
+        raise RuntimeError("GARGAND needs these permissions before applying the template: " + ", ".join(missing) + ". No changes were made.")
     created = {"categories": 0, "channels": 0, "roles": 0}
     role_objects = {}
     for role_name, hex_colour in template["roles"]:
