@@ -48,6 +48,16 @@ def install(main):
         guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
         role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS gargand_reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        channel_id INTEGER NOT NULL,
+        due_at INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_gargand_reminders_due ON gargand_reminders(due_at);
     """)
     conn.commit(); conn.close()
 
@@ -279,6 +289,38 @@ def install(main):
         await ctx.send("Configuration backup created. Keep this file private because it contains server IDs and settings.", file=file_obj)
 
 
+
+    @bot.hybrid_command(name="remind", description="Set a persistent reminder for 1 minute to 7 days from now.")
+    @main.commands.guild_only()
+    async def remind(ctx, duration: str, *, message: str):
+        try:
+            delay = int(main.parse_duration(duration))
+        except (ValueError, TypeError):
+            await ctx.send("Use a duration like 10m, 2h, or 1d.")
+            return
+        if delay < 60 or delay > 604800:
+            await ctx.send("Reminders must be between 1 minute and 7 days from now.")
+            return
+        message = str(message or "").strip()[:800]
+        if not message:
+            await ctx.send("Add the reminder message after the duration.")
+            return
+        due_at = int(time.time()) + delay
+        conn = db()
+        conn.execute(
+            "INSERT INTO gargand_reminders(guild_id,user_id,channel_id,due_at,message,created_at) VALUES(?,?,?,?,?,?)",
+            (ctx.guild.id, ctx.author.id, ctx.channel.id, due_at, message, int(time.time())),
+        )
+        conn.commit()
+        conn.close()
+        await ctx.send(
+            embed=embed(
+                "⏰ Reminder saved",
+                f"I'll remind {ctx.author.mention} in **{main.human_duration(delay)}**.\n**Reminder:** {message}",
+                main.SUCCESS,
+            )
+        )
+
     original_ai = getattr(main, "generate_ai_text", None)
     if original_ai:
         async def memory_ai(ctx, task, prompt, *, max_prompt=700):
@@ -301,12 +343,48 @@ def install(main):
             await original_ai(ctx, task, prompt, max_prompt=max_prompt)
         main.generate_ai_text = memory_ai
 
+    @main.tasks.loop(seconds=15)
+    async def reminder_worker():
+        conn = db()
+        due = conn.execute(
+            "SELECT id,guild_id,user_id,channel_id,message FROM gargand_reminders WHERE due_at<=? ORDER BY due_at LIMIT 20",
+            (int(time.time()),),
+        ).fetchall()
+        conn.close()
+        for row in due:
+            user_id = int(row["user_id"])
+            reminder_message = str(row["message"] or "")[:800]
+            sent = False
+            channel = bot.get_channel(int(row["channel_id"]))
+            allowed_mentions = main.discord.AllowedMentions(users=[main.discord.Object(id=user_id)], roles=False, everyone=False)
+            if channel is not None and hasattr(channel, "send"):
+                try:
+                    await channel.send(f"<@{user_id}> ⏰ Reminder: {reminder_message}", allowed_mentions=allowed_mentions)
+                    sent = True
+                except (main.discord.Forbidden, main.discord.HTTPException):
+                    sent = False
+            if not sent:
+                try:
+                    user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+                    await user.send(embed=embed("⏰ Gargand reminder", reminder_message, main.INFO))
+                except (main.discord.Forbidden, main.discord.HTTPException, AttributeError):
+                    pass
+            conn = db()
+            conn.execute("DELETE FROM gargand_reminders WHERE id=?", (int(row["id"]),))
+            conn.commit()
+            conn.close()
+
     async def startup():
         await asyncio.sleep(3)
         try:
             await bot.tree.sync()
         except Exception as exc:
             print("Gargand upgrades slash sync:", repr(exc))
+        try:
+            if not reminder_worker.is_running():
+                reminder_worker.start()
+        except Exception as exc:
+            print("Gargand reminder worker startup:", type(exc).__name__)
     bot.loop.create_task(startup())
     print("Gargand modular upgrades loaded: Auto-Mod, XP, analytics, AI memory.")
 
