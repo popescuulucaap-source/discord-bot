@@ -3717,17 +3717,37 @@ async def kick(ctx: commands.Context, member: discord.Member, *, reason: str = "
 
 @bot.hybrid_command(name="report")
 async def report_member(ctx: commands.Context, member: discord.Member, *, reason: str):
-    """Privately send a member report to the configured staff log channel."""
+    """Submit a report privately to staff."""
+    is_interaction = ctx.interaction is not None
+    if is_interaction:
+        await ctx.defer(ephemeral=True)
+
+    async def report_reply(message_embed: discord.Embed):
+        if is_interaction:
+            await ctx.send(embed=message_embed, ephemeral=True)
+            return
+        try:
+            await ctx.author.send(embed=message_embed)
+        except (discord.Forbidden, discord.HTTPException):
+            await ctx.send(embed=message_embed, delete_after=10)
+
     if not ctx.guild:
-        await ctx.send(embed=embed("🚩 Reports are server-only", "Use this command inside the server where the issue happened.", WARNING))
+        await report_reply(embed("🚩 Reports are server-only", "Use this command inside the server where the issue happened.", WARNING))
         return
     reason = reason.strip()[:500]
     if not reason:
-        await ctx.send(embed=embed("🚩 Add a reason", "Please include a short reason for the report.", WARNING), delete_after=6)
+        await report_reply(embed("🚩 Add a reason", "Please include a short reason for the report.", WARNING))
         return
     if member.id == ctx.author.id:
-        await ctx.send(embed=embed("🚩 Invalid report", "You cannot report yourself.", WARNING), delete_after=6)
+        await report_reply(embed("🚩 Invalid report", "You cannot report yourself.", WARNING))
         return
+    # Prefix-command invocations can expose the reason in chat; remove the
+    # invocation when possible. Slash-command responses are ephemeral.
+    if not is_interaction and ctx.message:
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
     case_id = record_moderation_case(
         ctx.guild, "member_report", ctx.author, member, reason,
         details="Community-submitted report. Review the context before taking action.",
@@ -3741,7 +3761,7 @@ async def report_member(ctx: commands.Context, member: discord.Member, *, reason
         f"**Reason:** {reason}\n\nPlease review the context before taking action.",
         WARNING,
     )
-    await ctx.send(embed=embed("🚩 Report sent", f"Your report about {member.mention} was sent to the server staff for review.\n**Case:** `#{case_id}`", SUCCESS), delete_after=10)
+    await report_reply(embed("🚩 Report sent", f"Your report about {member.mention} was sent to the server staff for review.\n**Case:** `#{case_id}`", SUCCESS))
 
 
 @bot.hybrid_command()
