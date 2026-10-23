@@ -2493,6 +2493,7 @@ invite_cache: dict[int, dict[str, int]] = {}
 anti_nuke_events: dict[tuple[int, int, str], deque[float]] = defaultdict(deque)
 anti_nuke_escalated: set[tuple[int, int, str]] = set()
 raid_mentions: dict[tuple[int, int], deque[int]] = defaultdict(deque)
+spam_message_windows: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 raid_join_windows: dict[int, deque[float]] = defaultdict(deque)
 raid_watch_last_alert: dict[int, float] = {}
 raid_lockdown_starting: set[int] = set()
@@ -4080,6 +4081,21 @@ async def unjail(ctx: commands.Context, member: discord.Member, *, reason: str =
     await ctx.send(embed=embed("🔓 Member unjailed", f"{member.mention} has been released. ✨\n\n**Case:** `#{case_id}`", SUCCESS), delete_after=8)
 
 
+@bot.hybrid_command(name="antispam")
+@admin_only()
+async def antispam_command(ctx: commands.Context, enabled: Optional[bool] = None):
+    """Enable or disable the built-in burst-spam protection."""
+    if not ctx.guild:
+        return
+    if enabled is None:
+        enabled = bool(setting(ctx.guild, "anti_spam", False))
+        state = "enabled" if enabled else "disabled"
+        await ctx.send(embed=embed("🛡️ Anti-spam status", f"Anti-spam is currently **{state}**. Use `!antispam true` or `!antispam false` to change it.", INFO))
+        return
+    set_setting(ctx.guild, "anti_spam", bool(enabled))
+    await ctx.send(embed=embed("🛡️ Anti-spam updated", f"Burst-spam protection is now **{'enabled' if enabled else 'disabled'}**. When enabled, Gargand checks for 6 messages within 8 seconds and applies a short timeout to non-staff members.", SUCCESS))
+
+
 @bot.hybrid_group(name="setup", invoke_without_command=True)
 @admin_only()
 async def setup(ctx: commands.Context):
@@ -5531,6 +5547,37 @@ async def on_message(message: discord.Message):
 
     active_prefix = await command_prefix_for(bot, message)
     is_command_message = message.content.startswith(active_prefix)
+
+    # Optional burst-spam protection. Keep the window in memory (not message
+    # contents), and never enforce it against staff or bot accounts.
+    if setting(guild, "anti_spam", False) and not is_command_message and isinstance(message.author, discord.Member) and not is_staff(message.author):
+        spam_key = (guild.id, message.author.id)
+        spam_now = time.monotonic()
+        spam_window = spam_message_windows[spam_key]
+        spam_window.append(spam_now)
+        while spam_window and spam_now - spam_window[0] > 8:
+            spam_window.popleft()
+        if len(spam_window) >= 6:
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            timed_out = False
+            try:
+                await message.author.timeout(timedelta(seconds=30), reason="Gargand anti-spam: message burst")
+                timed_out = True
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            if timed_out:
+                case_id = record_moderation_case(guild, "anti_spam_timeout", bot.user, message.author, "Sent 6 messages within 8 seconds", details="Automated burst-spam protection; message content was not stored.")
+                await log_action(guild, "🛡️ Anti-spam timeout", f"Timed out {message.author.mention} for 30 seconds after a message burst.\\n**Case:** `#{case_id}`", WARNING)
+            else:
+                try:
+                    await message.channel.send(embed=embed("🛡️ Slow down", f"{message.author.mention}, please slow down your messages.", WARNING), delete_after=4)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            spam_window.clear()
+            return
     if not is_command_message:
         mommy_matches = len(re.findall(r"(?<!\w)mommy(?!\w)", message.content, re.IGNORECASE))
         add_speech_count(guild.id, message.author.id, "mommy", mommy_matches)
