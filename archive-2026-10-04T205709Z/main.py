@@ -5590,10 +5590,19 @@ async def on_message(message: discord.Message):
         swear_matches = sum(len(pattern.findall(message.content)) for item in configured_words if (pattern := swear_word_pattern(item)))
         add_speech_count(guild.id, message.author.id, "swear", swear_matches)
 
-        anti_swear_enabled = bool(setting(guild, "anti_swear", False))
+        anti_swear_enabled = bool(setting(guild, "anti_swear", False)) or bool(setting(guild, "automod_bad_words", False))
         if anti_swear_enabled and swear_matches and not (isinstance(message.author, discord.Member) and is_staff(message.author)):
             try:
                 await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            punishment = str(setting(guild, "automod_punishment", "delete") or "delete").strip().lower()
+            if punishment in {"timeout", "mute"} and isinstance(message.author, discord.Member):
+                try:
+                    await message.author.timeout(timedelta(seconds=30), reason="Gargand Auto-Mod: configured word filter")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            try:
                 await message.channel.send(embed=embed("🧼 Keep it clean", f"{message.author.mention}, that word or phrase is filtered in this server.", WARNING), delete_after=5)
             except (discord.Forbidden, discord.HTTPException):
                 pass
