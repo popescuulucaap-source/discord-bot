@@ -5562,7 +5562,7 @@ def collect_guild_health(guild, settings):
         }
 
     channels = {}
-    for key in ("logs_channel_id", "verification_channel_id", "ticket_panel_channel_id", "automod_log_channel_id", "welcome_channel_id", "feedback_channel_id"):
+    for key in ("logs_channel_id", "verification_channel_id", "ticket_panel_channel_id", "automod_log_channel_id", "welcome_channel_id", "feedback_channel_id", "suggestions_channel_id"):
         try:
             channel_id = int(settings.get(key) or 0)
         except (TypeError, ValueError):
