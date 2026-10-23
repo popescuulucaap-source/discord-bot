@@ -536,6 +536,22 @@ async def log_action(guild: discord.Guild, title: str, description: str, color: 
         pass
 
 
+async def log_automod_action(guild: discord.Guild, title: str, description: str, color: discord.Color = WARNING):
+    """Send Auto-Mod events to the dedicated channel, falling back to normal logs."""
+    try:
+        configured_id = int(get_settings(guild.id).get("automod_log_channel_id") or 0)
+    except (TypeError, ValueError):
+        configured_id = 0
+    channel = guild.get_channel(configured_id) if configured_id else None
+    if isinstance(channel, discord.TextChannel):
+        try:
+            await channel.send(embed=embed(title, description, color))
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    await log_action(guild, title, description, color)
+
+
 def record_moderation_case(
     guild: discord.Guild,
     action: str,
@@ -5603,7 +5619,7 @@ async def on_message(message: discord.Message):
                 pass
             if timed_out:
                 case_id = record_moderation_case(guild, "anti_spam_timeout", bot.user, message.author, "Sent 6 messages within 8 seconds", details="Automated burst-spam protection; message content was not stored.")
-                await log_action(guild, "🛡️ Anti-spam timeout", f"Timed out {message.author.mention} for 30 seconds after a message burst.\\n**Case:** `#{case_id}`", WARNING)
+                await log_automod_action(guild, "🛡️ Anti-spam timeout", f"Timed out {message.author.mention} for 30 seconds after {spam_max_messages} messages within {spam_window_seconds} seconds.\\n**Case:** `#{case_id}`", WARNING)
             else:
                 try:
                     await message.channel.send(embed=embed("🛡️ Slow down", f"{message.author.mention}, please slow down your messages.", WARNING), delete_after=4)
@@ -5635,6 +5651,8 @@ async def on_message(message: discord.Message):
                 await message.channel.send(embed=embed("🧼 Keep it clean", f"{message.author.mention}, that word or phrase is filtered in this server.", WARNING), delete_after=5)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+            case_id = record_moderation_case(guild, "automod_bad_words", bot.user, message.author, "Configured word filter matched", details="Automatic word filter; message content was not stored.", channel=message.channel)
+            await log_automod_action(guild, "🧼 Auto-Mod word filter", f"Filtered a message from {message.author.mention} in {message.channel.mention}.\\n**Case:** `#{case_id}`", WARNING)
             return
 
     # Dashboard-controlled mention protection; staff are exempt.
@@ -5650,7 +5668,7 @@ async def on_message(message: discord.Message):
             except (discord.Forbidden, discord.HTTPException):
                 pass
             case_id = record_moderation_case(guild, "automod_mentions", bot.user, message.author, f"Exceeded mention limit ({mention_limit})", details="Automatic mention protection; message content was not stored.")
-            await log_action(guild, "📣 Auto-Mod mention protection", f"Removed a message from {message.author.mention} for exceeding the mention limit.\\n**Case:** `#{case_id}`", WARNING)
+            await log_automod_action(guild, "📣 Auto-Mod mention protection", f"Removed a message from {message.author.mention} for exceeding the mention limit.\\n**Case:** `#{case_id}`", WARNING)
             return
 
     # Optional repeat-flood protection stores only a short-lived content hash.
@@ -5673,7 +5691,7 @@ async def on_message(message: discord.Message):
             except (discord.Forbidden, discord.HTTPException):
                 pass
             case_id = record_moderation_case(guild, "automod_flood", bot.user, message.author, "Repeated identical messages", details="Automatic repeat-flood protection; message content was not stored.")
-            await log_action(guild, "🌊 Auto-Mod flood protection", f"Removed repeated messages from {message.author.mention}.\\n**Case:** `#{case_id}`", WARNING)
+            await log_automod_action(guild, "🌊 Auto-Mod flood protection", f"Removed repeated messages from {message.author.mention}.\\n**Case:** `#{case_id}`", WARNING)
             flood_window.clear()
             return
 
