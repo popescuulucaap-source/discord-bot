@@ -3699,6 +3699,35 @@ async def kick(ctx: commands.Context, member: discord.Member, *, reason: str = "
     await ctx.send(embed=embed("👢 Kicked", f"{member.mention} has been kicked.\n**Case:** `#{case_id}`", WARNING), delete_after=5)
 
 
+@bot.hybrid_command(name="report")
+async def report_member(ctx: commands.Context, member: discord.Member, *, reason: str):
+    """Privately send a member report to the configured staff log channel."""
+    if not ctx.guild:
+        await ctx.send(embed=embed("🚩 Reports are server-only", "Use this command inside the server where the issue happened.", WARNING))
+        return
+    reason = reason.strip()[:500]
+    if not reason:
+        await ctx.send(embed=embed("🚩 Add a reason", "Please include a short reason for the report.", WARNING), delete_after=6)
+        return
+    if member.id == ctx.author.id:
+        await ctx.send(embed=embed("🚩 Invalid report", "You cannot report yourself.", WARNING), delete_after=6)
+        return
+    case_id = record_moderation_case(
+        ctx.guild, "member_report", ctx.author, member, reason,
+        details="Community-submitted report. Review the context before taking action.",
+        channel=ctx.channel,
+    )
+    await log_action(
+        ctx.guild, "🚩 Member report received",
+        f"**Reported member:** {member.mention} (`{member.id}`)\n"
+        f"**Reported by:** {ctx.author.mention} (`{ctx.author.id}`)\n"
+        f"**Channel:** {ctx.channel.mention}\n**Case:** `#{case_id}`\n"
+        f"**Reason:** {reason}\n\nPlease review the context before taking action.",
+        WARNING,
+    )
+    await ctx.send(embed=embed("🚩 Report sent", f"Your report about {member.mention} was sent to the server staff for review.\n**Case:** `#{case_id}`", SUCCESS), delete_after=10)
+
+
 @bot.hybrid_command()
 @staff_only()
 async def warn(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
