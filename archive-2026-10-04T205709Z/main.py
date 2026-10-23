@@ -2494,6 +2494,7 @@ anti_nuke_events: dict[tuple[int, int, str], deque[float]] = defaultdict(deque)
 anti_nuke_escalated: set[tuple[int, int, str]] = set()
 raid_mentions: dict[tuple[int, int], deque[int]] = defaultdict(deque)
 spam_message_windows: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+flood_message_windows: dict[tuple[int, int], deque[tuple[float, int]]] = defaultdict(deque)
 raid_join_windows: dict[int, deque[float]] = defaultdict(deque)
 raid_watch_last_alert: dict[int, float] = {}
 raid_lockdown_starting: set[int] = set()
@@ -4093,6 +4094,7 @@ async def antispam_command(ctx: commands.Context, enabled: Optional[bool] = None
         await ctx.send(embed=embed("🛡️ Anti-spam status", f"Anti-spam is currently **{state}**. Use `!antispam true` or `!antispam false` to change it.", INFO))
         return
     set_setting(ctx.guild, "anti_spam", bool(enabled))
+    set_setting(ctx.guild, "automod_spam", bool(enabled))
     await ctx.send(embed=embed("🛡️ Anti-spam updated", f"Burst-spam protection is now **{'enabled' if enabled else 'disabled'}**. When enabled, Gargand checks for 6 messages within 8 seconds and applies a short timeout to non-staff members.", SUCCESS))
 
 
@@ -5550,14 +5552,16 @@ async def on_message(message: discord.Message):
 
     # Optional burst-spam protection. Keep the window in memory (not message
     # contents), and never enforce it against staff or bot accounts.
-    if setting(guild, "anti_spam", False) and not is_command_message and isinstance(message.author, discord.Member) and not is_staff(message.author):
+    if (setting(guild, "anti_spam", False) or setting(guild, "automod_spam", False)) and not is_command_message and isinstance(message.author, discord.Member) and not is_staff(message.author):
         spam_key = (guild.id, message.author.id)
         spam_now = time.monotonic()
         spam_window = spam_message_windows[spam_key]
         spam_window.append(spam_now)
-        while spam_window and spam_now - spam_window[0] > 8:
+        spam_window_seconds = bounded_setting_int(guild, "automod_window_seconds", 8, 3, 60)
+        spam_max_messages = bounded_setting_int(guild, "automod_max_messages", 6, 3, 20)
+        while spam_window and spam_now - spam_window[0] > spam_window_seconds:
             spam_window.popleft()
-        if len(spam_window) >= 6:
+        if len(spam_window) >= spam_max_messages:
             try:
                 await message.delete()
             except (discord.Forbidden, discord.HTTPException):
@@ -5593,6 +5597,46 @@ async def on_message(message: discord.Message):
                 await message.channel.send(embed=embed("🧼 Keep it clean", f"{message.author.mention}, that word or phrase is filtered in this server.", WARNING), delete_after=5)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+            return
+
+    # Dashboard-controlled mention protection; staff are exempt.
+    if setting(guild, "automod_mentions", False) and isinstance(message.author, discord.Member) and not is_staff(message.author):
+        mention_limit = bounded_setting_int(guild, "automod_mention_limit", 5, 2, 20)
+        if len(message.mentions) + (1 if message.mention_everyone else 0) >= mention_limit:
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            try:
+                await message.author.timeout(timedelta(seconds=30), reason="Gargand Auto-Mod: mention limit exceeded")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            case_id = record_moderation_case(guild, "automod_mentions", bot.user, message.author, f"Exceeded mention limit ({mention_limit})", details="Automatic mention protection; message content was not stored.")
+            await log_action(guild, "📣 Auto-Mod mention protection", f"Removed a message from {message.author.mention} for exceeding the mention limit.\\n**Case:** `#{case_id}`", WARNING)
+            return
+
+    # Optional repeat-flood protection stores only a short-lived content hash.
+    if setting(guild, "automod_flood", False) and not is_command_message and isinstance(message.author, discord.Member) and not is_staff(message.author):
+        flood_key = (guild.id, message.author.id)
+        flood_now = time.monotonic()
+        message_fingerprint = hash(message.content.strip().casefold())
+        flood_window = flood_message_windows[flood_key]
+        flood_window.append((flood_now, message_fingerprint))
+        while flood_window and flood_now - flood_window[0][0] > 15:
+            flood_window.popleft()
+        repeats = sum(1 for _, fingerprint in flood_window if fingerprint == message_fingerprint)
+        if message.content.strip() and repeats >= 4:
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            try:
+                await message.author.timeout(timedelta(seconds=30), reason="Gargand Auto-Mod: repeated message flood")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            case_id = record_moderation_case(guild, "automod_flood", bot.user, message.author, "Repeated identical messages", details="Automatic repeat-flood protection; message content was not stored.")
+            await log_action(guild, "🌊 Auto-Mod flood protection", f"Removed repeated messages from {message.author.mention}.\\n**Case:** `#{case_id}`", WARNING)
+            flood_window.clear()
             return
 
     # AFK cleanup when the user speaks.
