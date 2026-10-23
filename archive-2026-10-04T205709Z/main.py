@@ -4254,6 +4254,7 @@ async def configbackup_command(ctx: commands.Context):
     """Export this server's Gargand settings to a JSON attachment."""
     settings = get_settings(ctx.guild.id)
     backup = {
+        "format": "gargand-server-config",
         "product": "Gargand",
         "schema_version": 1,
         "guild_id": str(ctx.guild.id),
