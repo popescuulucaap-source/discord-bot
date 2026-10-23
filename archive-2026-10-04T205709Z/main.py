@@ -1724,7 +1724,11 @@ class AppealServerSelect(discord.ui.Select):
         options = []
         for g in bot.guilds:
             cfg = get_settings(g.id)
-            if cfg.get("appeal_server_id") == appeal_guild.id:
+            try:
+                configured_appeal_guild_id = int(cfg.get("appeal_server_id") or 0)
+            except (TypeError, ValueError):
+                configured_appeal_guild_id = 0
+            if configured_appeal_guild_id == appeal_guild.id:
                 options.append(discord.SelectOption(label=g.name[:100], value=str(g.id), description=f"Appeals for {g.name}"[:100], emoji="🏛️"))
         if not options:
             options.append(discord.SelectOption(label="No configured main servers", value="0", description="Run !setup in a main server first.", emoji="⚠️"))
@@ -1794,6 +1798,10 @@ class AppealTicketReasonModal(discord.ui.Modal, title="📝 Appeal"):
                 category = None
         overwrites = {appeal_guild.default_role: discord.PermissionOverwrite(view_channel=False), interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),}
         appeal_staff_id = get_settings(appeal_guild.id).get("staff_role_id")
+        try:
+            appeal_staff_id = int(appeal_staff_id) if appeal_staff_id else 0
+        except (TypeError, ValueError):
+            appeal_staff_id = 0
         staff_role = appeal_guild.get_role(appeal_staff_id) if appeal_staff_id else None
         if staff_role:
             overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
@@ -5672,22 +5680,63 @@ async def handle_website_job(job):
 
     if job.get("kind") == "settings":
         current = get_settings(guild_id)
-        # A dashboard owner can only configure IDs that belong to this guild.
-        for key, value in payload.items():
-            if value is None:
+        # Convert dashboard resource IDs to integers before storing them. Discord.py
+        # expects integer IDs; leaving select values as strings breaks channel/role lookups.
+        clear_keys = set()
+        for key, value in list(payload.items()):
+            if value is None or value == "":
+                clear_keys.add(key)
+                payload[key] = None
                 continue
             if key.endswith("_channel_id") or key.endswith("_category_id"):
-                channel = guild.get_channel(int(value))
+                try:
+                    resource_id = int(value)
+                except (TypeError, ValueError):
+                    print(f"Website setting {key!r} ignored for guild {guild_id}: invalid channel ID.")
+                    payload[key] = None
+                    continue
+                channel = guild.get_channel(resource_id)
                 expected = discord.CategoryChannel if key.endswith("_category_id") else discord.TextChannel
                 if not isinstance(channel, expected):
                     print(f"Website setting {key!r} ignored for guild {guild_id}: channel not found or wrong type.")
                     payload[key] = None
+                else:
+                    payload[key] = channel.id
             elif key.endswith("_role_id"):
-                if guild.get_role(int(value)) is None:
+                try:
+                    resource_id = int(value)
+                except (TypeError, ValueError):
+                    print(f"Website setting {key!r} ignored for guild {guild_id}: invalid role ID.")
+                    payload[key] = None
+                    continue
+                if guild.get_role(resource_id) is None:
                     print(f"Website setting {key!r} ignored for guild {guild_id}: role not found.")
                     payload[key] = None
+                else:
+                    payload[key] = resource_id
+            elif key == "appeal_server_id":
+                try:
+                    payload[key] = int(str(value).strip())
+                except (TypeError, ValueError):
+                    print(f"Website appeal server ID ignored for guild {guild_id}: invalid server ID.")
+                    payload[key] = None
+            elif key == "anti_nuke_trusted_role_ids":
+                if not isinstance(value, list):
+                    payload[key] = []
+                else:
+                    trusted_ids = []
+                    for item in value[:20]:
+                        try:
+                            role_id = int(item)
+                        except (TypeError, ValueError):
+                            continue
+                        if guild.get_role(role_id) is not None:
+                            trusted_ids.append(role_id)
+                    payload[key] = trusted_ids
         previous_anti_raid = bool(current.get("anti_raid", False))
         current.update(payload)
+        for key in clear_keys:
+            current.pop(key, None)
         if "anti_raid" in payload and payload["anti_raid"] and not previous_anti_raid:
             changed, rate_limited, total = await apply_external_app_lock(guild)
             print(f"Website enabled anti-raid for {guild_id}: protected {changed}/{total} channels.")
