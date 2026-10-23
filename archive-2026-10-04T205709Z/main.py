@@ -4393,7 +4393,7 @@ async def appeal_server(ctx: commands.Context):
 
 
 # This lets users literally type: !appeal server / !apeal server.
-@bot.hybrid_group(name="appeal", invoke_without_command=True)
+@bot.hybrid_group(name="appeal", aliases=["apeal"], invoke_without_command=True)
 async def appeal_group(ctx: commands.Context):
     await ctx.send(embed=embed("📝 Appeals", "Use `!appeal server` here in the appeal server to choose the main server.", INFO))
 
