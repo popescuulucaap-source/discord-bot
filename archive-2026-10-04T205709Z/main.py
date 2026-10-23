@@ -1076,6 +1076,17 @@ async def before_raid_lockdown_restore_watcher():
 
 
 async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type: str, answers: list[tuple[str, str]] | None = None):
+    normalized_type = re.sub(r"[^a-z0-9_-]", "", str(ticket_type).lower())[:32] or "support"
+    marker = f"gargand-ticket-owner:{user.id};type:{normalized_type}"
+    # Avoid accidentally creating multiple active tickets when a user double-clicks
+    # the panel or submits a modal twice. Closed tickets are deliberately excluded.
+    existing = next(
+        (ch for ch in guild.text_channels
+         if (ch.topic or "").startswith(marker) and not ch.name.startswith("closed-")),
+        None,
+    )
+    if existing:
+        return existing
     category_id = setting(guild, "ticket_category_id")
     staff_role_id = setting(guild, "staff_role_id")
     category = guild.get_channel(category_id) if category_id else None
@@ -1086,9 +1097,15 @@ async def create_ticket(guild: discord.Guild, user: discord.Member, ticket_type:
     }
     if staff_role:
         overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_messages=True)
-    name = f"ticket-{user.name[:16]}".lower().replace(" ", "-")
+    name = f"ticket-{normalized_type}-{user.name[:12]}".lower().replace(" ", "-")[:90]
     try:
-        channel = await guild.create_text_channel(name, category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason="Gargand ticket system")
+        channel = await guild.create_text_channel(
+            name,
+            topic=marker,
+            category=category if isinstance(category, discord.CategoryChannel) else None,
+            overwrites=overwrites,
+            reason="Gargand ticket system",
+        )
     except discord.Forbidden:
         return None
     qtext = ""
@@ -1506,20 +1523,78 @@ class TicketQuestionsModal(discord.ui.Modal):
         await interaction.response.send_message(f"🎫 Ticket created: {channel.mention if channel else 'failed to create the ticket.'}", ephemeral=True)
 
 
+class TicketCloseConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Confirm close", emoji="🔒", style=discord.ButtonStyle.danger)
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("Only server staff can close this ticket.", ephemeral=True)
+            return
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel) or not (channel.topic or "").startswith("gargand-ticket-owner:"):
+            await interaction.response.send_message("This channel is not a Gargand ticket.", ephemeral=True)
+            return
+        try:
+            overwrites = dict(channel.overwrites)
+            for target, overwrite in list(overwrites.items()):
+                if isinstance(target, discord.Member) and overwrite.view_channel is True:
+                    overwrite.send_messages = False
+                    overwrite.add_reactions = False
+                    overwrites[target] = overwrite
+            new_name = channel.name if channel.name.startswith("closed-") else f"closed-{channel.name}"[:100]
+            await channel.edit(name=new_name, overwrites=overwrites, reason=f"Ticket closed by {interaction.user}")
+            await interaction.response.edit_message(
+                content=f"🔒 Ticket closed by {interaction.user.mention}. Staff can still review the history.",
+                view=None,
+            )
+            await send_telemetry("ticket_closed", guild=channel.guild, user=interaction.user,
+                                 metadata={"channel_id": channel.id, "ticket_type": (channel.topic or "")[:100]})
+        except discord.Forbidden:
+            await interaction.response.send_message("I need Manage Channels and permission to update ticket access.", ephemeral=True)
+        except discord.HTTPException:
+            await interaction.response.send_message("Discord could not close this ticket right now. Please try again.", ephemeral=True)
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Ticket remains open.", view=None)
+
+
 class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Claim", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="testiny:ticket:claim")
+    @discord.ui.button(label="Claim", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="gargand:ticket:claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
             await interaction.response.send_message("Staff only.", ephemeral=True)
             return
-        await interaction.response.send_message(embed=embed("🙋 Ticket claimed", f"{interaction.user.mention} has claimed this ticket.", INFO))
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel) or not (channel.topic or "").startswith("gargand-ticket-owner:"):
+            await interaction.response.send_message("This channel is not a Gargand ticket.", ephemeral=True)
+            return
         try:
-            await interaction.channel.edit(topic=f"Claimed by {interaction.user.id}")
+            await channel.edit(topic=f"{channel.topic};claimed-by:{interaction.user.id}"[:1024])
         except discord.HTTPException:
-            pass
+            await interaction.response.send_message("I could not save the claim. Check my Manage Channels permission.", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=embed("🙋 Ticket claimed", f"{interaction.user.mention} has claimed this ticket.", INFO))
+
+    @discord.ui.button(label="Close ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="gargand:ticket:close")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
+            await interaction.response.send_message("Only server staff can close this ticket.", ephemeral=True)
+            return
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel) or not (channel.topic or "").startswith("gargand-ticket-owner:"):
+            await interaction.response.send_message("This channel is not a Gargand ticket.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Close this ticket? The channel will be renamed and the ticket opener will lose send access.",
+            view=TicketCloseConfirmView(),
+            ephemeral=True,
+        )
 
 
 class CaseAppealReviewView(discord.ui.View):
