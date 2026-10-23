@@ -1565,7 +1565,7 @@ class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Claim", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="gargand:ticket:claim")
+    @discord.ui.button(label="Claim", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="testiny:ticket:claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not is_staff(interaction.user):
             await interaction.response.send_message("Staff only.", ephemeral=True)
