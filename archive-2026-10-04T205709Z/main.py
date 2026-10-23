@@ -5689,17 +5689,29 @@ def poll_nightfall_website():
     heartbeat = {
         "guilds": guild_snapshot
     }
-    response = requests.post(
-        f"{GARGAND_WEBSITE_URL}/api/bot/heartbeat",
-        headers=headers,
-        json=heartbeat,
-        timeout=12,
-    )
-    response.raise_for_status()
+    # Heartbeats are idempotent, so retry brief network/read timeouts. Render
+    # can briefly cold-start; a single timeout should not mark the bridge dead.
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                f"{GARGAND_WEBSITE_URL}/api/bot/heartbeat",
+                headers=headers,
+                json=heartbeat,
+                timeout=(5, 25),
+            )
+            response.raise_for_status()
+            break
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt == 2:
+                raise
+            time.sleep(1.5 * (attempt + 1))
+    # Pull consumes queued jobs on the server, so do not blindly retry it after
+    # a read timeout (the first request may already have consumed those jobs).
     response = requests.get(
         f"{GARGAND_WEBSITE_URL}/api/bot/pull",
         headers=headers,
-        timeout=12,
+        timeout=(5, 25),
     )
     response.raise_for_status()
     data = response.json()
