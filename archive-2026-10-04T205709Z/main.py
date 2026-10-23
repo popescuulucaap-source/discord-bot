@@ -5711,11 +5711,11 @@ async def handle_website_job(job):
                     resource_id = int(value)
                 except (TypeError, ValueError):
                     print(f"Website setting {key!r} ignored for guild {guild_id}: invalid role ID.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                     continue
                 if guild.get_role(resource_id) is None:
                     print(f"Website setting {key!r} ignored for guild {guild_id}: role not found.")
-                    payload[key] = None
+                    invalid_keys.add(key)
                 else:
                     payload[key] = resource_id
             elif key == "appeal_server_id":
@@ -5723,7 +5723,7 @@ async def handle_website_job(job):
                     payload[key] = int(str(value).strip())
                 except (TypeError, ValueError):
                     print(f"Website appeal server ID ignored for guild {guild_id}: invalid server ID.")
-                    payload[key] = None
+                    invalid_keys.add(key)
             elif key == "anti_nuke_trusted_role_ids":
                 if not isinstance(value, list):
                     payload[key] = []
