@@ -5945,6 +5945,12 @@ async def handle_website_job(job):
 
     if job.get("kind") == "action" and payload.get("action") == "sync_setup":
         refreshed = await refresh_setup_dashboard(guild)
+        asyncio.create_task(send_telemetry(
+            "dashboard_action",
+            guild=guild,
+            user=bot.user,
+            metadata={"action": "sync_setup", "result": "success" if refreshed else "no_saved_panel"},
+        ))
         if not refreshed:
             print(f"Website requested setup sync for {guild_id}, but no saved !setup dashboard exists.")
     elif job.get("kind") == "action":
