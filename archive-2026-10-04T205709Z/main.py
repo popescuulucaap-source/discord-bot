@@ -1743,8 +1743,12 @@ class AppealServerSelect(discord.ui.Select):
         if not main_guild:
             await interaction.response.send_message("Main server is unavailable.", ephemeral=True)
             return
-        # Store the currently selected main server in the appeal guild so the panel
+        # Store the selected main server in the appeal server so the panel
         # can be used by normal banned users (not only administrators).
+        appeal_guild = bot.get_guild(self.appeal_guild_id)
+        if not appeal_guild:
+            await interaction.response.send_message("Appeal server is unavailable.", ephemeral=True)
+            return
         set_setting(appeal_guild, "active_appeal_main_guild_id", gid)
         e = embed("📝 Ban appeals", f"Appeals for **{main_guild.name}** are ready.\n\nBanned members can press the button below to open a private appeal ticket.", INFO)
         await interaction.response.send_message(e, view=AppealOpenView(gid, self.appeal_guild_id))
@@ -4477,17 +4481,6 @@ async def appeal_case_subcommand(ctx: commands.Context, case_id: int, *, stateme
         view=CaseAppealReviewView(appeal_id),
     )
     await ctx.send(embed=embed("✅ Appeal sent privately", f"Your appeal for case `#{case_id}` is now in a private staff ticket: {channel.mention}.\nReview record: `#{appeal_record}`.", SUCCESS), delete_after=12)
-
-
-@bot.hybrid_group(name="apeal", invoke_without_command=True)
-async def apeal_group(ctx: commands.Context):
-    await ctx.send(embed=embed("📝 Appeals", "Use `!apeal server` here in the appeal server to choose the main server.", INFO))
-
-
-@apeal_group.command(name="server")
-@admin_only()
-async def apeal_server_subcommand(ctx: commands.Context):
-    await appeal_server(ctx)
 
 
 @bot.hybrid_command()
