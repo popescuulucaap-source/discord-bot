@@ -9,6 +9,7 @@ on:
       - "start_nightfall.py"
       - "nightfall_upgrades.py"
       - "gargand_features.py"
+      - "gargand_music.py"
       - ".github/workflows/bot-syntax.yml"
   pull_request:
     branches: [main]
@@ -59,11 +60,13 @@ jobs:
 
           import nightfall_upgrades
           import gargand_features
+          import gargand_music
           import asyncio
 
           async def register_extensions():
               nightfall_upgrades.install(module)
               gargand_features.install(module)
+              gargand_music.install(module)
 
           asyncio.run(register_extensions())
 
@@ -72,7 +75,8 @@ jobs:
               "achievements", "quest", "season", "seasonleaderboard",
               "globalleaderboard", "party", "image", "rss",
               "animewatch", "animeunwatch", "animewatches", "auditlog",
-              "leaderboard",
+              "leaderboard", "play", "skip", "pause", "resume", "stop",
+              "queue", "nowplaying", "volume", "leave",
           }
           missing = sorted(name for name in required if module.bot.get_command(name) is None)
           if missing:
