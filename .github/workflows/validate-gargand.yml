@@ -18,4 +18,4 @@ jobs:
           python-version: "3.11"
       - name: Compile bot modules
         run: |
-          python -m py_compile start_nightfall.py nightfall_upgrades.py gargand_features.py archive-2026-10-04T205709Z/main.py
+          python -m py_compile start_nightfall.py nightfall_upgrades.py gargand_features.py gargand_music.py archive-2026-10-04T205709Z/main.py
