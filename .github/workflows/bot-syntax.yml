@@ -59,8 +59,13 @@ jobs:
 
           import nightfall_upgrades
           import gargand_features
-          nightfall_upgrades.install(module)
-          gargand_features.install(module)
+          import asyncio
+
+          async def register_extensions():
+              nightfall_upgrades.install(module)
+              gargand_features.install(module)
+
+          asyncio.run(register_extensions())
 
           required = {
               "setup", "report", "antispam", "kick", "warn",
