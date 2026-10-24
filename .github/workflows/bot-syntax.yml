@@ -6,12 +6,18 @@ on:
     paths:
       - "archive-2026-10-04T205709Z/main.py"
       - "archive-2026-10-04T205709Z/requirements.txt"
+      - "start_nightfall.py"
+      - "nightfall_upgrades.py"
+      - "gargand_features.py"
       - ".github/workflows/bot-syntax.yml"
   pull_request:
     branches: [main]
     paths:
       - "archive-2026-10-04T205709Z/main.py"
       - "archive-2026-10-04T205709Z/requirements.txt"
+      - "start_nightfall.py"
+      - "nightfall_upgrades.py"
+      - "gargand_features.py"
       - ".github/workflows/bot-syntax.yml"
   workflow_dispatch:
 
@@ -30,28 +36,43 @@ jobs:
           python-version: "3.11"
       - name: Install bot dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r archive-2026-10-04T205709Z/requirements.txt
-      - name: Compile bot source
-        run: python -m py_compile archive-2026-10-04T205709Z/main.py
-      - name: Import bot and verify core commands register
+      - name: Compile all bot modules
+        run: python -m py_compile archive-2026-10-04T205709Z/main.py nightfall_upgrades.py gargand_features.py start_nightfall.py
+      - name: Import bot and verify core plus feature commands
         env:
           DISCORD_TOKEN: smoke-test-token-not-used
+          BOT_DB: /tmp/gargand-smoke.sqlite3
         run: |
           python - <<'PY'
           import importlib.util
+          import sys
           from pathlib import Path
 
-          source = Path("archive-2026-10-04T205709Z/main.py")
+          root = Path.cwd()
+          sys.path.insert(0, str(root))
+          source = root / "archive-2026-10-04T205709Z" / "main.py"
           spec = importlib.util.spec_from_file_location("gargand_bot_smoke_test", source)
           if spec is None or spec.loader is None:
               raise RuntimeError("Could not load Gargand bot module")
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          required = {"setup", "report", "antispam", "kick", "warn"}
+          import nightfall_upgrades
+          import gargand_features
+          nightfall_upgrades.install(module)
+          gargand_features.install(module)
+
+          required = {
+              "setup", "report", "antispam", "kick", "warn",
+              "achievements", "quest", "season", "seasonleaderboard",
+              "globalleaderboard", "party", "image", "rss",
+              "animewatch", "animeunwatch", "animewatches", "auditlog",
+              "leaderboard",
+          }
           missing = sorted(name for name in required if module.bot.get_command(name) is None)
           if missing:
               raise AssertionError(f"Expected bot commands failed to register: {missing}")
 
           print(f"Import succeeded; {len(module.bot.commands)} prefix commands registered.")
-          print("Core command registration passed: " + ", ".join(sorted(required)))
+          print("Core and feature command registration passed: " + ", ".join(sorted(required)))
           PY
