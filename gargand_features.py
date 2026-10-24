@@ -743,5 +743,5 @@ def install(main):
         bot.tree.allowed_contexts = discord.app_commands.AppCommandContext(guild=True, bot_dm=True, private_channel=True)
     except (AttributeError, TypeError):
         pass
-    bot.loop.create_task(start_workers())
+    asyncio.get_running_loop().create_task(start_workers())
     print("Gargand community features loaded: achievements, quests, co-op parties, seasonal events, image search, RSS, anime alerts, staff audit logs.")
