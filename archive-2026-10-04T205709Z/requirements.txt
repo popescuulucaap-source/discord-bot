@@ -3,5 +3,5 @@ Pillow>=10,<13
 python-dotenv>=1,<2
 requests>=2.32,<3
 PyNaCl>=1.5,<2
-yt-dlp>=2025.1.15,<2027
+yt-dlp[default]>=2025.11.12,<2027
 imageio-ffmpeg>=0.5,<1
