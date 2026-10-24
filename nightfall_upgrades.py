@@ -270,40 +270,6 @@ def install(main):
             lines.append("⚠️ Anti-nuke audit-log detection may be limited without View Audit Log.")
         await ctx.send(embed=embed("🛡️ Gargand security check", "\n".join(lines), main.INFO))
 
-    @bot.hybrid_command(name="configbackup", description="Export this server's Gargand settings as JSON.")
-    @main.admin_only()
-    @main.commands.guild_only()
-    async def configbackup(ctx):
-        data = main.get_settings(ctx.guild.id)
-        safe_payload = {
-            "format": "gargand-server-config",
-            "version": 1,
-            "guild_id": str(ctx.guild.id),
-            "guild_name": ctx.guild.name,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-            "settings": data,
-            "note": "Settings only; this export does not contain bot tokens or OAuth client secrets.",
-        }
-        contents = main.json.dumps(safe_payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
-        file_obj = main.discord.File(main.io.BytesIO(contents), filename=f"gargand-config-{ctx.guild.id}.json")
-        if getattr(ctx, "interaction", None):
-            await ctx.send(
-                "Configuration backup created. Keep this file private because it contains server IDs and settings.",
-                file=file_obj,
-                ephemeral=True,
-            )
-        else:
-            try:
-                await ctx.author.send(
-                    "Your Gargand configuration backup is attached. Keep this file private because it contains server IDs and settings.",
-                    file=file_obj,
-                )
-                await ctx.send("I sent your configuration backup to your DMs.")
-            except (main.discord.Forbidden, main.discord.HTTPException):
-                await ctx.send("I couldn't DM the backup. Enable server-member DMs and run the command again so the private configuration isn't posted publicly.")
-
-
-
     @bot.hybrid_command(name="remind", description="Set a persistent reminder for 1 minute to 7 days from now.")
     @main.commands.guild_only()
     async def remind(ctx, duration: str, *, message: str):
