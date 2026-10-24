@@ -14,6 +14,7 @@ sys.path.insert(1, ROOT)
 import main
 import nightfall_upgrades
 import gargand_features
+import gargand_music
 
 # Register extensions during discord.py's async setup phase, when an event loop is active.
 _original_setup_hook = main.bot.setup_hook
@@ -22,6 +23,7 @@ async def gargand_setup_hook():
     await _original_setup_hook()
     nightfall_upgrades.install(main)
     gargand_features.install(main)
+    gargand_music.install(main)
 
 main.bot.setup_hook = gargand_setup_hook
 main.bot.run(main.TOKEN)
