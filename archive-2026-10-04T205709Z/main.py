@@ -3178,7 +3178,7 @@ class J4JTicketView(discord.ui.View):
 
 @bot.hybrid_command(name="help")
 async def help_command(ctx: commands.Context):
-    e = embed("📚 Gargand command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation & cases**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!case <id>` • `!cases [@user]` • `!purge <1–100>`\n\n**Security**\n`!raidlockdown [duration]` • `!raidrelease` • staged join-surge watch and optional automatic lockdown\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / appeals / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!appeal case <id> <statement>` • `!appeal server` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
+    e = embed("📚 Gargand command center", "Commands support both `/slash` commands and the traditional `!prefix` commands.\n\n**Moderation & cases**\n`!ban @user [reason]` • `!kick @user [reason]` • `!warn @user [reason]` • `!timeout @user <duration>` • `!case <id>` • `!cases [@user]` • `!purge <1–100>`\n\n**Security**\n`!antinsfw on/off/status` • `!reportchannel #channel` • `!raidlockdown [duration]` • `!raidrelease` • staged join-surge watch and optional automatic lockdown\n\n**Community**\n`!afk [reason]` • `!invites @user` • `!invited @user` • `!inviter @user` • `!reset invites @user`\n\n**Tickets / appeals / setup**\n`!setup` • `!jail @user [reason]` • `!unjail @user [reason]` • `!appeal case <id> <statement>` • `!appeal server` • `!ticket panel` • `!ticket questions <type> q1 | q2 | ...`\n\n**Fun**\n`!giveaway <duration> <winners> <prize> [| image_url]` • `!giveaway reroll <message_id>` • `!giveaway end <message_id>` • `!daily`\n\n**Utilities**\n`!stick <message>` • `!unstick` • `!role give @user @role` • `!role make <name> <hex>` • `!autoreaction #channel 😀` • `!proof please`", EMBED_COLOR)
     e.add_field(name="❔ Help & questions", value="`!questions` • Get answers about Gargand, setup, logging, security, tickets, commands and the website dashboard.", inline=False)
     e.add_field(name="🧾 Case history", value="Successful moderation actions receive a case ID. Use `!case <id>` or `!cases [@user]`; staff can search the shared history on the website dashboard.", inline=False)
     e.add_field(name="🌙 New tools", value="`!warnings @user` • `!clearwarnings @user` (admins) • `!announce #channel <message>` • `!poll Question | Option 1 | Option 2`", inline=False)
@@ -3797,14 +3797,26 @@ async def report_member(ctx: commands.Context, member: discord.Member, *, reason
         details="Community-submitted report. Review the context before taking action.",
         channel=ctx.channel,
     )
-    await log_action(
-        ctx.guild, "🚩 Member report received",
-        f"**Reported member:** {member.mention} (`{member.id}`)\n"
-        f"**Reported by:** {ctx.author.mention} (`{ctx.author.id}`)\n"
-        f"**Channel:** {ctx.channel.mention}\n**Case:** `#{case_id}`\n"
-        f"**Reason:** {reason}\n\nPlease review the context before taking action.",
-        WARNING,
+    report_details = (
+        f"**Reported member:** {member.mention} ({member.id})\n"
+        f"**Reported by:** {ctx.author.mention} ({ctx.author.id})\n"
+        f"**Channel:** {ctx.channel.mention}\n**Case:** #{case_id}\n"
+        f"**Reason:** {reason}\n\nPlease review the context before taking action."
     )
+    raw_reports_channel_id = setting(ctx.guild, "reports_channel_id")
+    try:
+        reports_channel_id = int(raw_reports_channel_id) if raw_reports_channel_id is not None else 0
+    except (TypeError, ValueError):
+        reports_channel_id = 0
+    reports_channel = ctx.guild.get_channel(reports_channel_id) if reports_channel_id else None
+    if isinstance(reports_channel, discord.TextChannel):
+        await reports_channel.send(
+            embed=embed("🚩 Member report received", report_details, WARNING),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await log_action(ctx.guild, "🚩 Member report received", report_details, WARNING)
+
     await report_reply(embed("🚩 Report sent", f"Your report about {member.mention} was sent to the server staff for review.\n**Case:** `#{case_id}`", SUCCESS))
 
 
