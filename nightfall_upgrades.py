@@ -5,16 +5,81 @@ Adds Auto-Mod, XP/levels, analytics, AI channel memory, and extra admin tooling.
 """
 import asyncio
 import importlib
+import os
+import re
 import sqlite3
 import sys
 import time
 import random
+
+import requests
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
 INSTALLED = False
 WINDOWS = defaultdict(deque)
 XP_COOLDOWNS = {}
+NSFW_TEXT_PATTERNS = (
+    re.compile(r"\b(?:onlyfans|pornhub|xvideos|xnxx|xhamster|redtube|rule34)\b", re.I),
+    re.compile(r"\b(?:send|share|trade|drop|post)\s+(?:me\s+)?(?:nudes?|nude pics?|explicit pics?|lewd pics?)\b", re.I),
+    re.compile(r"\b(?:nudes?|explicit pics?|lewd pics?)\b", re.I),
+)
+NSFW_MAX_IMAGES = 3
+NSFW_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _fallback_nsfw_text(text):
+    """Small local fallback when the external moderation key is not configured."""
+    text = str(text or "")[:6000]
+    return any(pattern.search(text) for pattern in NSFW_TEXT_PATTERNS)
+
+
+def _message_image_urls(message):
+    """Return a short list of image attachments suitable for the moderation endpoint."""
+    urls = []
+    for attachment in list(getattr(message, "attachments", []) or []):
+        filename = str(getattr(attachment, "filename", "") or "").casefold()
+        content_type = str(getattr(attachment, "content_type", "") or "").casefold()
+        is_image = content_type.startswith("image/") or filename.endswith(
+            (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")
+        )
+        size = int(getattr(attachment, "size", 0) or 0)
+        if not is_image or (size and size > NSFW_MAX_IMAGE_BYTES):
+            continue
+        url = str(getattr(attachment, "url", "") or "")
+        if url.startswith("https://") and url not in urls:
+            urls.append(url)
+        if len(urls) >= NSFW_MAX_IMAGES:
+            break
+    return urls
+
+
+def _classify_nsfw(api_key, text, image_urls):
+    """Use the multimodal moderation API; only sexual-content categories trigger this filter."""
+    inputs = []
+    if str(text or "").strip():
+        inputs.append({"type": "text", "text": str(text)[:4000]})
+    for url in list(image_urls or [])[:NSFW_MAX_IMAGES]:
+        inputs.append({"type": "image_url", "image_url": {"url": url}})
+    if not inputs:
+        return False
+    response = requests.post(
+        "https://api.openai.com/v1/moderations",
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        json={"model": "omni-moderation-latest", "input": inputs},
+        timeout=(4, 12),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    for result in payload.get("results", []) or []:
+        categories = result.get("categories", {}) or {}
+        if categories.get("sexual") is True or categories.get("sexual/minors") is True:
+            return True
+    return False
+
+
+def _moderation_key():
+    return (os.getenv("OPENAI_MODERATION_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
 
 def install(main):
     global INSTALLED
@@ -91,6 +156,71 @@ def install(main):
             return
         guild = message.guild
         member = message.author
+
+        # Anti-NSFW: check message text and uploaded images before XP or other message features.
+        if setting(guild, "antinsfw_enabled", False) and isinstance(member, main.discord.Member) and not main.is_staff(member):
+            message_text = str(message.content or "")
+            image_urls = _message_image_urls(message)
+            api_key = _moderation_key()
+            detected = _fallback_nsfw_text(message_text)
+            detection_source = "local text rules" if detected else ""
+
+            if api_key and (message_text.strip() or image_urls):
+                try:
+                    detected = await asyncio.wait_for(
+                        asyncio.to_thread(_classify_nsfw, api_key, message_text, image_urls),
+                        timeout=15,
+                    )
+                    detection_source = "multimodal moderation" if detected else ""
+                except Exception as exc:
+                    # A failed remote scan must not crash on_message. Keep the local text fallback.
+                    print("Gargand anti-NSFW moderation check failed:", type(exc).__name__)
+                    detected = _fallback_nsfw_text(message_text)
+                    detection_source = "local text rules" if detected else ""
+
+            if detected:
+                try:
+                    await message.delete()
+                except (main.discord.Forbidden, main.discord.NotFound, main.discord.HTTPException):
+                    pass
+
+                try:
+                    notice = embed(
+                        "🛡️ Gargand · Content filter",
+                        "Your message was removed because the server's anti-NSFW filter flagged it. "
+                        "If you think this was a mistake, contact a server moderator.",
+                        main.WARNING,
+                    )
+                    await member.send(embed=notice)
+                except (main.discord.Forbidden, main.discord.HTTPException):
+                    pass
+
+                raw_log_id = setting(guild, "antinsfw_log_channel_id") or setting(guild, "automod_log_channel_id") or setting(guild, "logs_channel_id")
+                try:
+                    log_id = int(raw_log_id) if raw_log_id is not None else 0
+                except (TypeError, ValueError):
+                    log_id = 0
+                log_channel = guild.get_channel(log_id) if log_id else None
+                if isinstance(log_channel, main.discord.TextChannel):
+                    detail = "Uploaded image(s)" if image_urls else "Message text"
+                    try:
+                        report = embed(
+                            "🛡️ Anti-NSFW action",
+                            f"**Member:** {member.mention} ({member.id})\n"
+                            f"**Channel:** {message.channel.mention}\n"
+                            f"**Content type:** {detail}\n"
+                            f"**Detection:** {detection_source or 'moderation rules'}\n"
+                            f"[Open message]({message.jump_url})",
+                            main.WARNING,
+                        )
+                        await log_channel.send(
+                            embed=report,
+                            allowed_mentions=main.discord.AllowedMentions.none(),
+                        )
+                    except (main.discord.Forbidden, main.discord.HTTPException):
+                        pass
+                return
+
         if setting(guild, "analytics_enabled", False):
             analytics(guild.id, "messages")
 
@@ -155,6 +285,92 @@ def install(main):
                         await target.send(embed=embed("✨ Level up!", f"{member.mention} reached **level {level}**!", main.SUCCESS))
 
     bot.add_listener(upgraded_message, "on_message")
+
+    async def report_reply(ctx, text):
+        if getattr(ctx, "interaction", None):
+            await ctx.send(text, ephemeral=True)
+        else:
+            await ctx.send(text)
+
+    @bot.hybrid_command(name="antinsfw", description="Enable or inspect the server's NSFW text and image filter.")
+    @main.admin_only()
+    @main.commands.guild_only()
+    async def anti_nsfw_command(ctx, mode: str = "status"):
+        mode = str(mode or "status").strip().casefold()
+        api_key_ready = bool(_moderation_key())
+        if mode in ("on", "enable", "enabled"):
+            main.set_setting(ctx.guild, "antinsfw_enabled", True)
+            if api_key_ready:
+                message = "Anti-NSFW is enabled. Text and eligible image attachments will be checked by the moderation service."
+            else:
+                message = (
+                    "Anti-NSFW is enabled, but only the limited local text-pattern fallback is active. "
+                    "Image classification and broader text moderation need OPENAI_API_KEY (or OPENAI_MODERATION_API_KEY) "
+                    "in the bot host's environment, followed by a bot restart."
+                )
+        elif mode in ("off", "disable", "disabled"):
+            main.set_setting(ctx.guild, "antinsfw_enabled", False)
+            message = "Anti-NSFW is disabled for this server."
+        elif mode == "status":
+            enabled = bool(setting(ctx.guild, "antinsfw_enabled", False))
+            if api_key_ready:
+                scanner = "Multimodal text and image moderation key detected."
+            else:
+                scanner = "No moderation API key detected; image contents cannot be classified yet."
+            message = f"Anti-NSFW is {'enabled' if enabled else 'disabled'}.\n{scanner}\nUse !antinsfw on or !antinsfw off."
+        else:
+            message = "Usage: !antinsfw status, !antinsfw on, or !antinsfw off."
+        await ctx.send(embed=embed("🛡️ Gargand · Anti-NSFW", message, main.INFO))
+
+    @bot.hybrid_command(name="reportchannel", description="Set the private channel used for member reports.")
+    @main.admin_only()
+    @main.commands.guild_only()
+    async def report_channel_command(ctx, channel: main.discord.TextChannel):
+        main.set_setting(ctx.guild, "reports_channel_id", channel.id)
+        await ctx.send(embed=embed(
+            "📝 Report channel saved",
+            f"Member reports will be sent to {channel.mention}. Staff should restrict access to this channel.",
+            main.SUCCESS,
+        ))
+
+    @bot.hybrid_command(name="report", description="Privately report a member to server moderators.")
+    @main.commands.guild_only()
+    async def safety_report_command(ctx, member: main.discord.Member, *, reason: str):
+        reason = str(reason or "").strip()
+        if member.id == ctx.author.id:
+            await report_reply(ctx, "You cannot report yourself.")
+            return
+        if member.bot:
+            await report_reply(ctx, "Reports about bots should be sent to a server moderator.")
+            return
+        if not reason:
+            await report_reply(ctx, "Add a short reason so moderators know what to review.")
+            return
+        raw_channel_id = setting(ctx.guild, "reports_channel_id") or setting(ctx.guild, "logs_channel_id")
+        try:
+            target_id = int(raw_channel_id) if raw_channel_id is not None else 0
+        except (TypeError, ValueError):
+            target_id = 0
+        target_channel = ctx.guild.get_channel(target_id) if target_id else None
+        if not isinstance(target_channel, main.discord.TextChannel):
+            await report_reply(ctx, "Reports are not configured yet. Ask an admin to run !reportchannel #reports.")
+            return
+        report_embed = embed(
+            "📝 Member report",
+            f"Reported member: {member.mention} ({member.id})\n"
+            f"Reported by: {ctx.author.mention} ({ctx.author.id})\n"
+            f"Reason: {reason[:1200]}",
+            main.WARNING,
+        )
+        try:
+            await target_channel.send(
+                embed=report_embed,
+                allowed_mentions=main.discord.AllowedMentions.none(),
+            )
+        except main.discord.Forbidden:
+            await report_reply(ctx, "Gargand cannot post in the configured reports channel.")
+            return
+        await report_reply(ctx, "Your report was sent to the moderation team.")
 
     @bot.hybrid_command(name="level")
     @main.commands.guild_only()
