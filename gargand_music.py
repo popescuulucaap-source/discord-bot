@@ -183,7 +183,7 @@ def install(main):
         if task is None or task.done():
             state["task"] = asyncio.create_task(player_loop(guild_id))
 
-    @bot.hybrid_command(name="play", description="Play a track or search for music in your voice channel.")
+    @bot.command(name="play", help="Play a track or search for music in your voice channel.")
     @main.commands.guild_only()
     async def play(ctx, *, query: str):
         query = str(query or "").strip()
@@ -219,7 +219,7 @@ def install(main):
         )
         start_player(ctx.guild.id)
 
-    @bot.hybrid_command(name="skip", description="Skip the currently playing track.")
+    @bot.command(name="skip", help="Skip the currently playing track.")
     @main.commands.guild_only()
     async def skip(ctx):
         voice = voice_for(ctx)
@@ -230,7 +230,7 @@ def install(main):
         voice.stop()
         await ctx.send("⏭️ Skipped the current track.")
 
-    @bot.hybrid_command(name="pause", description="Pause the current music track.")
+    @bot.command(name="pause", help="Pause the current music track.")
     @main.commands.guild_only()
     async def pause(ctx):
         voice = voice_for(ctx)
@@ -240,7 +240,7 @@ def install(main):
         voice.pause()
         await ctx.send("⏸️ Music paused.")
 
-    @bot.hybrid_command(name="resume", description="Resume paused music.")
+    @bot.command(name="resume", help="Resume paused music.")
     @main.commands.guild_only()
     async def resume(ctx):
         voice = voice_for(ctx)
@@ -250,7 +250,7 @@ def install(main):
         voice.resume()
         await ctx.send("▶️ Music resumed.")
 
-    @bot.hybrid_command(name="stop", description="Stop playback and clear the music queue.")
+    @bot.command(name="stop", help="Stop playback and clear the music queue.")
     @main.commands.guild_only()
     async def stop(ctx):
         state = player(ctx.guild.id)
@@ -261,7 +261,7 @@ def install(main):
         state["now"] = None
         await ctx.send("⏹️ Playback stopped and the queue was cleared.")
 
-    @bot.hybrid_command(name="queue", description="Show the current music track and upcoming queue.")
+    @bot.command(name="queue", help="Show the current music track and upcoming queue.")
     @main.commands.guild_only()
     async def queue(ctx):
         state = player(ctx.guild.id)
@@ -280,7 +280,7 @@ def install(main):
             lines.append(f"...and {extra} more track(s).")
         await ctx.send(embed=music_embed("🎶 Music queue", "\n".join(lines)[:4000]))
 
-    @bot.hybrid_command(name="nowplaying", description="Show the track currently playing.")
+    @bot.command(name="nowplaying", help="Show the track currently playing.")
     @main.commands.guild_only()
     async def nowplaying(ctx):
         current = player(ctx.guild.id)["now"]
@@ -297,7 +297,7 @@ def install(main):
             )
         )
 
-    @bot.hybrid_command(name="volume", description="Set the music volume from 5 to 150 percent.")
+    @bot.command(name="volume", help="Set the music volume from 5 to 150 percent.")
     @main.commands.guild_only()
     async def volume(ctx, percent: int):
         if percent < 5 or percent > 150:
@@ -310,7 +310,7 @@ def install(main):
             voice.source.volume = state["volume"]
         await ctx.send(f"🔊 Music volume set to {percent}%.")
 
-    @bot.hybrid_command(name="leave", description="Disconnect Gargand from your voice channel and clear the queue.")
+    @bot.command(name="leave", help="Disconnect Gargand from your voice channel and clear the queue.")
     @main.commands.guild_only()
     async def leave(ctx):
         state = player(ctx.guild.id)
