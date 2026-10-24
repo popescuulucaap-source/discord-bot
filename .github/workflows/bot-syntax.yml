@@ -72,7 +72,7 @@ jobs:
           asyncio.run(register_extensions())
 
           required = {
-              "setup", "report", "antispam", "kick", "warn",
+              "setup", "report", "antispam", "kick", "warn", "antinsfw", "antiphishing", "reportchannel",
               "achievements", "quest", "season", "seasonleaderboard",
               "globalleaderboard", "party", "image", "rss",
               "animewatch", "animeunwatch", "animewatches", "auditlog",
