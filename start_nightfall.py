@@ -13,6 +13,8 @@ sys.path.insert(1, ROOT)
 
 import main
 import nightfall_upgrades
+import gargand_features
 
 nightfall_upgrades.install(main)
+gargand_features.install(main)
 main.bot.run(main.TOKEN)
