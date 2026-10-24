@@ -258,21 +258,23 @@ def install(main):
             message_text = str(message.content or "")
             image_urls = _message_image_urls(message)
             api_key = _moderation_key()
-            detected = _fallback_nsfw_text(message_text)
-            detection_source = "local text rules" if detected else ""
+            local_detected = _fallback_nsfw_text(message_text)
+            detected = local_detected
+            detection_source = "local text rules" if local_detected else ""
 
             if api_key and (message_text.strip() or image_urls):
                 try:
-                    detected = await asyncio.wait_for(
+                    remote_detected = await asyncio.wait_for(
                         asyncio.to_thread(_classify_nsfw, api_key, message_text, image_urls),
                         timeout=15,
                     )
-                    detection_source = "multimodal moderation" if detected else ""
+                    detected = local_detected or remote_detected
+                    detection_source = "multimodal moderation" if remote_detected else ("local text rules" if local_detected else "")
                 except Exception as exc:
-                    # A failed remote scan must not crash on_message. Keep the local text fallback.
+                    # A failed remote scan must not crash on_message or erase local detections.
                     print("Gargand anti-NSFW moderation check failed:", type(exc).__name__)
-                    detected = _fallback_nsfw_text(message_text)
-                    detection_source = "local text rules" if detected else ""
+                    detected = local_detected
+                    detection_source = "local text rules" if local_detected else ""
 
             if detected:
                 try:
@@ -298,7 +300,7 @@ def install(main):
                     log_id = 0
                 log_channel = guild.get_channel(log_id) if log_id else None
                 if isinstance(log_channel, main.discord.TextChannel):
-                    detail = "Uploaded image(s)" if image_urls else "Message text"
+                    detail = "Text and image previews" if image_urls and message_text.strip() else ("Image attachments/previews" if image_urls else "Message text")
                     try:
                         report = embed(
                             "🛡️ Anti-NSFW action",
