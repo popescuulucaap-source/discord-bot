@@ -41,13 +41,23 @@ async def handle_dashboard_action(guild, payload):
         raise RuntimeError("Music module is not initialized yet.")
     return await DASHBOARD_ACTION_HANDLER(guild, payload)
 
+def _configure_youtube_runtime(path):
+    """Tell yt-dlp exactly which Deno executable the bot host prepared."""
+    options = globals().get("YTDL_OPTIONS")
+    if not isinstance(options, dict):
+        return
+    options["js_runtimes"] = {"deno": {"path": os.path.abspath(path)}} if path else {"deno": {}}
+
+
 def prepare_youtube_runtime():
     """Find Deno or bootstrap the official Linux x86_64 runtime for YouTube EJS."""
     configured = os.getenv("GARGAND_DENO_PATH", "").strip()
     existing = configured if configured and os.path.isfile(configured) else shutil.which("deno")
     if existing:
-        runtime_dir = os.path.dirname(os.path.abspath(existing))
+        existing = os.path.abspath(existing)
+        runtime_dir = os.path.dirname(existing)
         os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        _configure_youtube_runtime(existing)
         print("Gargand music: YouTube JavaScript runtime is available.")
         return existing
 
@@ -61,6 +71,7 @@ def prepare_youtube_runtime():
     target = os.path.join(runtime_dir, "deno")
     if os.path.isfile(target) and os.access(target, os.X_OK):
         os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        _configure_youtube_runtime(target)
         return target
 
     os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
@@ -95,6 +106,7 @@ def prepare_youtube_runtime():
             os.replace(temporary_binary, target)
 
         os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        _configure_youtube_runtime(target)
         print("Gargand music: installed the official Deno runtime for YouTube extraction.")
         return target
     except Exception as exc:
@@ -119,6 +131,7 @@ YTDL_OPTIONS = {
     "retries": 2,
     "extractor_retries": 2,
     "default_search": "ytsearch1",
+    "js_runtimes": {"deno": {}},
 }
 
 
@@ -255,15 +268,21 @@ def install(main):
                     source = discord.PCMVolumeTransformer(audio, volume=float(state["volume"]))
                     finished = asyncio.Event()
                     loop = asyncio.get_running_loop()
+                    playback_error = {"message": ""}
 
                     def after_playback(error):
-                        if error:
-                            print("Gargand music playback warning:", repr(error))
-                        loop.call_soon_threadsafe(finished.set)
+                        def finish_on_loop():
+                            if error:
+                                playback_error["message"] = str(error)[:400] or type(error).__name__
+                            finished.set()
+                        loop.call_soon_threadsafe(finish_on_loop)
 
                     voice.play(source, after=after_playback)
                     state["last_error"] = ""
                     await finished.wait()
+                    if playback_error["message"]:
+                        state["last_error"] = playback_error["message"]
+                        print("Gargand music playback warning:", playback_error["message"][:200])
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
