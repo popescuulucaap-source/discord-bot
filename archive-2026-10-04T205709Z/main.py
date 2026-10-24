@@ -6041,7 +6041,7 @@ def _command_permission(name):
     admin_only = {
         "setup", "configbackup", "analytics", "securitycheck", "diagnose",
         "rss add", "rss list", "rss remove", "animewatch", "animeunwatch",
-        "animewatches", "auditlog", "official", "toggle_jail",
+        "animewatches", "auditlog", "official", "toggle_jail", "antinsfw", "antiphishing",
     }
     staff_only = {
         "ban", "kick", "warn", "timeout", "jail", "unjail", "purge",
