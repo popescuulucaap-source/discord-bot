@@ -365,7 +365,7 @@ def install(main):
                 reminder_worker.start()
         except Exception as exc:
             print("Gargand reminder worker startup:", type(exc).__name__)
-    bot.loop.create_task(startup())
+    asyncio.get_running_loop().create_task(startup())
     print("Gargand modular upgrades loaded: Auto-Mod, XP, analytics, AI memory.")
 
 def wait_for_main():
