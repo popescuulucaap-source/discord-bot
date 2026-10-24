@@ -1,4 +1,5 @@
 """Launch GARGAND from the nested bot directory used by the current Fadehost build."""
+import asyncio
 import os
 import sys
 
@@ -21,6 +22,9 @@ _original_setup_hook = main.bot.setup_hook
 
 async def gargand_setup_hook():
     await _original_setup_hook()
+    # Prepare YouTube's required JavaScript runtime without blocking the event loop.
+    # Failure to download Deno is logged but must not stop the rest of Gargand.
+    await asyncio.to_thread(gargand_music.prepare_youtube_runtime)
     nightfall_upgrades.install(main)
     gargand_features.install(main)
     gargand_music.install(main)
