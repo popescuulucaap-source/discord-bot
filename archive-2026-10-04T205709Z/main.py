@@ -6315,8 +6315,26 @@ async def handle_website_job(job):
         if not refreshed:
             print(f"Website requested setup sync for {guild_id}, but no saved !setup dashboard exists.")
     elif job.get("kind") == "action":
-        action = payload.get("action")
+        action = str(payload.get("action") or "")
         try:
+            if action.startswith("music_"):
+                import gargand_music
+                result = await gargand_music.handle_dashboard_action(guild, payload)
+                asyncio.create_task(send_telemetry(
+                    "dashboard_action", guild=guild, user=bot.user,
+                    metadata={"action": action, "result": "success", "message": str((result or {}).get("message", ""))[:180]}
+                ))
+                print(f"Website music action {action!r} completed for guild {guild_id}.")
+                return
+            if action.startswith("notification_"):
+                import gargand_features
+                result = await gargand_features.handle_dashboard_action(guild, payload)
+                asyncio.create_task(send_telemetry(
+                    "dashboard_action", guild=guild, user=bot.user,
+                    metadata={"action": action, "result": "success", "message": str((result or {}).get("message", ""))[:180]}
+                ))
+                print(f"Website notification action {action!r} completed for guild {guild_id}.")
+                return
             if action == "raid_lockdown":
                 locked, failed, restore_at = await start_raid_lockdown(guild, 10, actor=bot.user, reason="Dashboard emergency control")
                 print(f"Website requested raid lockdown for {guild_id}: locked {locked} channels, {failed} failed, expiry {restore_at}.")
