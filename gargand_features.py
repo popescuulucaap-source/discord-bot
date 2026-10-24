@@ -395,6 +395,9 @@ def install(main):
     @bot.hybrid_command(name="achievements", description="View your Gargand achievements.")
     @main.commands.guild_only()
     async def achievements(ctx, member: discord.Member = None):
+        if not setting(ctx.guild, "achievements_enabled", True):
+            await ctx.send("Achievements are disabled by this server's administrator.")
+            return
         target = member or ctx.author
         conn = db()
         rows = conn.execute(
@@ -409,6 +412,9 @@ def install(main):
     @bot.hybrid_command(name="quest", description="View today's daily community quest.")
     @main.commands.guild_only()
     async def quest(ctx):
+        if not setting(ctx.guild, "daily_quests_enabled", True):
+            await ctx.send("Daily quests are disabled by this server's administrator.")
+            return
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         conn = db()
         row = conn.execute(
@@ -424,6 +430,9 @@ def install(main):
     @bot.hybrid_command(name="season", description="See the current monthly Gargand community event.")
     @main.commands.guild_only()
     async def season(ctx):
+        if not setting(ctx.guild, "seasonal_events_enabled", True):
+            await ctx.send("Seasonal events are disabled by this server's administrator.")
+            return
         key = _season_key()
         conn = db()
         row = conn.execute(
@@ -438,6 +447,9 @@ def install(main):
     @bot.hybrid_command(name="seasonleaderboard", description="Show this month's community event leaderboard.")
     @main.commands.guild_only()
     async def seasonleaderboard(ctx):
+        if not setting(ctx.guild, "seasonal_events_enabled", True):
+            await ctx.send("Seasonal events are disabled by this server's administrator.")
+            return
         conn = db()
         rows = conn.execute(
             "SELECT user_id,points FROM gargand_season_points WHERE guild_id=? AND season_key=? ORDER BY points DESC LIMIT 10",
@@ -470,10 +482,16 @@ def install(main):
     @bot.hybrid_group(name="party", invoke_without_command=True, description="Create or join a community co-op party.")
     @main.commands.guild_only()
     async def party(ctx):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         await ctx.send("Use party create, party join, party leave, party status, or party leaderboard.")
 
     @party.command(name="create", description="Create a co-op party.")
     async def party_create(ctx, *, name: str):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         name = re.sub(r"\s+", " ", name).strip()[:24]
         if not name or not re.fullmatch(r"[\w -]+", name, flags=re.UNICODE):
             await ctx.send("Party names can use letters, numbers, spaces, underscores, and hyphens.")
@@ -497,6 +515,9 @@ def install(main):
 
     @party.command(name="join", description="Join a co-op party.")
     async def party_join(ctx, *, name: str):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         conn = db()
         exists = conn.execute("SELECT name FROM gargand_parties WHERE guild_id=? AND name=? COLLATE NOCASE", (ctx.guild.id, name.strip())).fetchone()
         if not exists:
@@ -515,6 +536,9 @@ def install(main):
 
     @party.command(name="leave", description="Leave your current co-op party.")
     async def party_leave(ctx):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         conn = db()
         cursor = conn.execute("DELETE FROM gargand_party_members WHERE guild_id=? AND user_id=?", (ctx.guild.id, ctx.author.id))
         conn.commit()
@@ -523,6 +547,9 @@ def install(main):
 
     @party.command(name="status", description="View your co-op party and its seasonal points.")
     async def party_status(ctx):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         conn = db()
         row = conn.execute("SELECT party_name FROM gargand_party_members WHERE guild_id=? AND user_id=?", (ctx.guild.id, ctx.author.id)).fetchone()
         if not row:
@@ -540,6 +567,9 @@ def install(main):
 
     @party.command(name="leaderboard", description="Show the co-op party leaderboard.")
     async def party_leaderboard(ctx):
+        if not setting(ctx.guild, "party_system_enabled", True):
+            await ctx.send("Co-op parties are disabled by this server's administrator.")
+            return
         conn = db()
         rows = conn.execute(
             "SELECT pm.party_name, COUNT(*) AS members, SUM(COALESCE(sp.points,0)) AS points "
