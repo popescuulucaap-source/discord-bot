@@ -139,6 +139,10 @@ def dashboard_snapshot(guild_id):
     community = {
         "xp_enabled": bool(settings.get("xp_enabled", False)),
         "analytics_enabled": bool(settings.get("analytics_enabled", False)),
+        "achievements_enabled": bool(settings.get("achievements_enabled", True)),
+        "daily_quests_enabled": bool(settings.get("daily_quests_enabled", True)),
+        "seasonal_events_enabled": bool(settings.get("seasonal_events_enabled", True)),
+        "party_system_enabled": bool(settings.get("party_system_enabled", True)),
         "xp_cooldown_seconds": int(settings.get("xp_cooldown_seconds", 30) or 30),
         "xp_per_message": int(settings.get("xp_per_message", 10) or 10),
         "members_with_xp": 0,
@@ -311,6 +315,10 @@ def install(main):
         guild_id, user_id = message.guild.id, message.author.id
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         season = _season_key()
+        achievements_enabled = bool(setting(message.guild, "achievements_enabled", True))
+        quests_enabled = bool(setting(message.guild, "daily_quests_enabled", True))
+        season_enabled = bool(setting(message.guild, "seasonal_events_enabled", True))
+        xp_enabled = bool(setting(message.guild, "xp_enabled", False))
         conn = db()
         conn.execute(
             "INSERT INTO gargand_user_activity(guild_id,user_id,total_messages) VALUES(?,?,1) "
@@ -322,37 +330,42 @@ def install(main):
             (guild_id, user_id),
         ).fetchone()
         total = int(row["total_messages"]) if row else 0
-        conn.execute(
-            "INSERT INTO gargand_season_points(guild_id,season_key,user_id,points) VALUES(?,?,?,1) "
-            "ON CONFLICT(guild_id,season_key,user_id) DO UPDATE SET points=points+1",
-            (guild_id, season, user_id),
-        )
-        conn.execute(
-            "INSERT INTO gargand_daily_quests(guild_id,user_id,quest_date,progress,completed) VALUES(?,?,?,1,0) "
-            "ON CONFLICT(guild_id,user_id,quest_date) DO UPDATE SET progress=CASE WHEN completed=0 THEN progress+1 ELSE progress END",
-            (guild_id, user_id, today),
-        )
-        quest_row = conn.execute(
-            "SELECT progress,completed FROM gargand_daily_quests WHERE guild_id=? AND user_id=? AND quest_date=?",
-            (guild_id, user_id, today),
-        ).fetchone()
+
+        if season_enabled:
+            conn.execute(
+                "INSERT INTO gargand_season_points(guild_id,season_key,user_id,points) VALUES(?,?,?,1) "
+                "ON CONFLICT(guild_id,season_key,user_id) DO UPDATE SET points=points+1",
+                (guild_id, season, user_id),
+            )
+
         quest_completed_now = False
-        if quest_row and int(quest_row["progress"]) >= 10 and not int(quest_row["completed"]):
-            cursor = conn.execute(
-                "UPDATE gargand_daily_quests SET completed=1 WHERE guild_id=? AND user_id=? AND quest_date=? AND completed=0",
+        if quests_enabled:
+            conn.execute(
+                "INSERT INTO gargand_daily_quests(guild_id,user_id,quest_date,progress,completed) VALUES(?,?,?,1,0) "
+                "ON CONFLICT(guild_id,user_id,quest_date) DO UPDATE SET progress=CASE WHEN completed=0 THEN progress+1 ELSE progress END",
                 (guild_id, user_id, today),
             )
-            quest_completed_now = cursor.rowcount == 1
+            quest_row = conn.execute(
+                "SELECT progress,completed FROM gargand_daily_quests WHERE guild_id=? AND user_id=? AND quest_date=?",
+                (guild_id, user_id, today),
+            ).fetchone()
+            if quest_row and int(quest_row["progress"]) >= 10 and not int(quest_row["completed"]):
+                cursor = conn.execute(
+                    "UPDATE gargand_daily_quests SET completed=1 WHERE guild_id=? AND user_id=? AND quest_date=? AND completed=0",
+                    (guild_id, user_id, today),
+                )
+                quest_completed_now = cursor.rowcount == 1
         conn.commit()
         conn.close()
 
         milestone_keys = []
-        if total >= 1:
-            milestone_keys.append("first_message")
-        if total >= 50:
-            milestone_keys.append("messages_50")
-        if total >= 500:
-            milestone_keys.append("messages_500")
+        if achievements_enabled:
+            if total >= 1:
+                milestone_keys.append("first_message")
+            if total >= 50:
+                milestone_keys.append("messages_50")
+            if total >= 500:
+                milestone_keys.append("messages_500")
         for key in milestone_keys:
             if grant_achievement(guild_id, user_id, key):
                 label = ACHIEVEMENTS[key][0]
@@ -364,10 +377,14 @@ def install(main):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
         if quest_completed_now:
-            award_bonus_xp(guild_id, user_id, 30)
+            if xp_enabled:
+                award_bonus_xp(guild_id, user_id, 30)
+                message_text = f"{message.author.mention} completed **Send 10 messages** and earned **30 bonus XP**!"
+            else:
+                message_text = f"{message.author.mention} completed **Send 10 messages**! XP rewards are disabled in this server."
             try:
                 await message.channel.send(
-                    embed=card("✅ Daily quest complete", f"{message.author.mention} completed **Send 10 messages** and earned **30 bonus XP**!"),
+                    embed=card("✅ Daily quest complete", message_text),
                     allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
             except (discord.Forbidden, discord.HTTPException):
