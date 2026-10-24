@@ -496,4 +496,3 @@ def install(main):
     DASHBOARD_SNAPSHOT_PROVIDER = dashboard_snapshot
 
     print("Gargand music commands loaded: join, play, skip, pause, resume, stop, queue, nowplaying, volume, leave.")
-    print("Gargand music commands loaded: play, skip, pause, resume, stop, queue, nowplaying, volume, leave.")
