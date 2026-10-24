@@ -15,6 +15,8 @@ from urllib.parse import quote_plus, urlparse
 import requests
 
 INSTALLED = False
+MAIN_MODULE = None
+DASHBOARD_ACTION_HANDLER = None
 ACHIEVEMENTS = {
     "first_message": ("First Steps", "Send your first message."),
     "messages_50": ("Regular", "Send 50 messages."),
@@ -125,13 +127,92 @@ def _fetch_anime(anilist_id):
     }
 
 
+def dashboard_snapshot(guild_id):
+    """Return safe per-server community and notification state for the website bridge."""
+    if MAIN_MODULE is None:
+        return {}
+    guild_id = int(guild_id)
+    conn = MAIN_MODULE.db_connect()
+    settings = MAIN_MODULE.get_settings(guild_id)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    season = _season_key()
+    community = {
+        "xp_enabled": bool(settings.get("xp_enabled", False)),
+        "analytics_enabled": bool(settings.get("analytics_enabled", False)),
+        "xp_cooldown_seconds": int(settings.get("xp_cooldown_seconds", 30) or 30),
+        "xp_per_message": int(settings.get("xp_per_message", 10) or 10),
+        "members_with_xp": 0,
+        "total_xp": 0,
+        "total_messages": 0,
+        "achievements_earned": 0,
+        "quests_completed_today": 0,
+        "season_points": 0,
+        "party_count": 0,
+        "analytics": [],
+    }
+    notifications = {"rss": [], "anime": []}
+    audit = []
+    try:
+        row = conn.execute("SELECT COUNT(*),COALESCE(SUM(xp),0) FROM nightfall_xp WHERE guild_id=?", (guild_id,)).fetchone()
+        if row:
+            community["members_with_xp"] = int(row[0] or 0)
+            community["total_xp"] = int(row[1] or 0)
+        row = conn.execute("SELECT COALESCE(SUM(total_messages),0) FROM gargand_user_activity WHERE guild_id=?", (guild_id,)).fetchone()
+        if row:
+            community["total_messages"] = int(row[0] or 0)
+        row = conn.execute("SELECT COUNT(*) FROM gargand_achievements WHERE guild_id=?", (guild_id,)).fetchone()
+        if row:
+            community["achievements_earned"] = int(row[0] or 0)
+        row = conn.execute("SELECT COUNT(*) FROM gargand_daily_quests WHERE guild_id=? AND quest_date=? AND completed=1", (guild_id, today)).fetchone()
+        if row:
+            community["quests_completed_today"] = int(row[0] or 0)
+        row = conn.execute("SELECT COALESCE(SUM(points),0) FROM gargand_season_points WHERE guild_id=? AND season_key=?", (guild_id, season)).fetchone()
+        if row:
+            community["season_points"] = int(row[0] or 0)
+        row = conn.execute("SELECT COUNT(*) FROM gargand_parties WHERE guild_id=?", (guild_id,)).fetchone()
+        if row:
+            community["party_count"] = int(row[0] or 0)
+        try:
+            rows = conn.execute("SELECT metric,COALESCE(SUM(value),0) AS total FROM nightfall_analytics WHERE guild_id=? GROUP BY metric ORDER BY metric", (guild_id,)).fetchall()
+            community["analytics"] = [{"metric": str(r[0])[:50], "total": int(r[1] or 0)} for r in rows[:20]]
+        except Exception:
+            pass
+        rows = conn.execute("SELECT id,channel_id,url FROM gargand_rss_subscriptions WHERE guild_id=? ORDER BY id DESC LIMIT 50", (guild_id,)).fetchall()
+        notifications["rss"] = [{"id": int(r[0]), "channel_id": str(r[1]), "url": str(r[2])[:512]} for r in rows]
+        rows = conn.execute("SELECT id,channel_id,anilist_id,title,anime_url,next_episode,next_airing_at FROM gargand_anime_watches WHERE guild_id=? ORDER BY title LIMIT 50", (guild_id,)).fetchall()
+        notifications["anime"] = [{
+            "id": int(r[0]), "channel_id": str(r[1]), "anilist_id": int(r[2]),
+            "title": str(r[3])[:180], "url": str(r[4])[:512],
+            "next_episode": int(r[5]) if r[5] is not None else None,
+            "next_airing_at": int(r[6]) if r[6] is not None else None,
+        } for r in rows]
+        rows = conn.execute("SELECT actor_id,command_name,channel_id,created_at FROM gargand_action_audit WHERE guild_id=? ORDER BY id DESC LIMIT 12", (guild_id,)).fetchall()
+        audit = [{
+            "actor_id": str(r[0]), "command": str(r[1])[:100],
+            "channel_id": str(r[2]) if r[2] else "",
+            "created_at": int(r[3]),
+        } for r in rows]
+    except Exception as exc:
+        print("Gargand dashboard snapshot warning:", type(exc).__name__, str(exc)[:160])
+    finally:
+        conn.close()
+    return {"community": community, "notifications": notifications, "audit": audit}
+
+
+async def handle_dashboard_action(guild, payload):
+    if not DASHBOARD_ACTION_HANDLER:
+        raise RuntimeError("Community/notification features are not initialized yet.")
+    return await DASHBOARD_ACTION_HANDLER(guild, payload)
+
+
 def install(main):
-    global INSTALLED
+    global INSTALLED, MAIN_MODULE, DASHBOARD_ACTION_HANDLER
     if INSTALLED or not hasattr(main, "bot"):
         return
     INSTALLED = True
     bot = main.bot
     discord = main.discord
+    MAIN_MODULE = main
 
     def db():
         return main.db_connect()
@@ -599,6 +680,13 @@ def install(main):
         )
         conn.commit()
         conn.close()
+        try:
+            asyncio.create_task(main.send_telemetry(
+                "staff_action", guild=guild, user=actor, command_name=str(command_name)[:100],
+                metadata={"channel_id": int(channel_id or 0)}
+            ))
+        except Exception:
+            pass
         raw_channel = setting(guild, "logs_channel_id")
         channel = guild.get_channel(int(raw_channel)) if str(raw_channel or "").isdigit() else None
         if isinstance(channel, discord.TextChannel) and channel.id != channel_id:
@@ -727,6 +815,88 @@ def install(main):
                 conn.close()
             except Exception as exc:
                 print("Gargand anime poll warning:", type(exc).__name__, str(exc)[:150])
+
+    async def dashboard_action(guild, payload):
+        action = str(payload.get("action") or "")
+        guild_id = int(guild.id)
+        if action == "notification_rss_add":
+            channel_id = str(payload.get("channel_id") or "").strip()
+            feed_url = str(payload.get("feed_url") or "").strip()
+            channel = guild.get_channel(int(channel_id)) if channel_id.isdigit() else None
+            if not isinstance(channel, discord.TextChannel):
+                raise ValueError("Choose a text or announcement channel in this server.")
+            items = await asyncio.to_thread(_fetch_feed, feed_url)
+            latest = items[0]["guid"] if items else None
+            conn = db()
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO gargand_rss_subscriptions(guild_id,channel_id,url,last_guid,created_at) VALUES(?,?,?,?,?)",
+                    (guild_id, channel.id, feed_url, latest, int(time.time())),
+                )
+                subscription_id = int(cursor.lastrowid)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise ValueError("That feed is already subscribed in this server.")
+            finally:
+                conn.close()
+            return {"message": f"RSS feed added as subscription #{subscription_id}."}
+
+        if action == "notification_rss_remove":
+            try:
+                subscription_id = int(payload.get("subscription_id"))
+            except (TypeError, ValueError):
+                raise ValueError("Choose a valid RSS subscription.")
+            conn = db()
+            cursor = conn.execute("DELETE FROM gargand_rss_subscriptions WHERE guild_id=? AND id=?", (guild_id, subscription_id))
+            conn.commit()
+            conn.close()
+            if not cursor.rowcount:
+                raise ValueError("That RSS subscription was not found.")
+            return {"message": f"RSS subscription #{subscription_id} removed."}
+
+        if action == "notification_anime_add":
+            channel_id = str(payload.get("channel_id") or "").strip()
+            channel = guild.get_channel(int(channel_id)) if channel_id.isdigit() else None
+            if not isinstance(channel, discord.TextChannel):
+                raise ValueError("Choose a text or announcement channel in this server.")
+            try:
+                anime_id = int(payload.get("anilist_id"))
+            except (TypeError, ValueError):
+                raise ValueError("Enter a valid AniList anime ID.")
+            if not 0 < anime_id < 2**31:
+                raise ValueError("Enter a valid positive AniList anime ID.")
+            anime = await asyncio.to_thread(_fetch_anime, anime_id)
+            conn = db()
+            try:
+                conn.execute(
+                    "INSERT INTO gargand_anime_watches(guild_id,channel_id,anilist_id,title,anime_url,next_episode,next_airing_at,last_notified_episode,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (guild_id, channel.id, anime["id"], anime["title"], anime["url"], anime["episode"], anime["airing_at"], max(0, (anime["episode"] or 1) - 1), int(time.time())),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise ValueError("This anime is already being watched in that channel.")
+            finally:
+                conn.close()
+            return {"message": f"Episode notifications enabled for {anime['title']}."}
+
+        if action == "notification_anime_remove":
+            try:
+                anime_id = int(payload.get("anilist_id"))
+            except (TypeError, ValueError):
+                raise ValueError("Choose a valid AniList anime ID.")
+            conn = db()
+            cursor = conn.execute("DELETE FROM gargand_anime_watches WHERE guild_id=? AND anilist_id=?", (guild_id, anime_id))
+            conn.commit()
+            conn.close()
+            if not cursor.rowcount:
+                raise ValueError("No watched anime with that ID was found in this server.")
+            return {"message": "Anime episode notifications removed."}
+
+        raise ValueError("Unknown notification action.")
+
+    DASHBOARD_ACTION_HANDLER = dashboard_action
 
     async def start_workers():
         await bot.wait_until_ready()
