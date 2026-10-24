@@ -5,6 +5,7 @@ All queue state is in memory; music queues intentionally reset when the bot rest
 """
 import asyncio
 import shutil
+import shlex
 from collections import deque
 from urllib.parse import urlparse
 
@@ -88,7 +89,15 @@ def _extract_stream(page_url):
         info = next((item for item in entries if item), None)
     if not info or not info.get("url"):
         raise ValueError("Could not resolve an audio stream for this track.")
-    return str(info["url"])
+    # Some providers require the same referer/user-agent for FFmpeg that yt-dlp used.
+    raw_headers = info.get("http_headers") if isinstance(info.get("http_headers"), dict) else {}
+    allowed_headers = {"user-agent", "referer", "origin", "accept", "accept-language"}
+    headers = {
+        str(key): str(value).replace("\\r", "").replace("\\n", "")
+        for key, value in raw_headers.items()
+        if str(key).casefold() in allowed_headers and str(value).strip()
+    }
+    return {"url": str(info["url"]), "headers": headers}
 
 
 def _duration(seconds):
@@ -155,11 +164,17 @@ def install(main):
                     ffmpeg = _ffmpeg_path()
                     if not ffmpeg:
                         raise RuntimeError("FFmpeg is not available. Install FFmpeg on the bot host and restart Gargand.")
-                    stream_url = await asyncio.to_thread(_extract_stream, track["webpage_url"])
+                    stream_info = await asyncio.to_thread(_extract_stream, track["webpage_url"])
+                    stream_url = stream_info["url"] if isinstance(stream_info, dict) else str(stream_info)
+                    before_options = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+                    headers = stream_info.get("headers", {}) if isinstance(stream_info, dict) else {}
+                    if headers:
+                        header_blob = "".join(f"{key}: {value}\\r\\n" for key, value in headers.items()) + "\\r\\n"
+                        before_options += " -headers " + shlex.quote(header_blob)
                     audio = discord.FFmpegPCMAudio(
                         stream_url,
                         executable=ffmpeg,
-                        before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                        before_options=before_options,
                         options="-vn",
                     )
                     source = discord.PCMVolumeTransformer(audio, volume=float(state["volume"]))
