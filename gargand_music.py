@@ -15,6 +15,23 @@ import yt_dlp
 INSTALLED = False
 PLAYERS = {}
 MAX_QUEUE = 100
+DASHBOARD_ACTION_HANDLER = None
+DASHBOARD_SNAPSHOT_PROVIDER = None
+
+
+def dashboard_snapshot(guild):
+    if DASHBOARD_SNAPSHOT_PROVIDER:
+        try:
+            return DASHBOARD_SNAPSHOT_PROVIDER(guild)
+        except Exception as exc:
+            print("Gargand music snapshot warning:", type(exc).__name__)
+    return {"connected": False, "channel_id": "", "channel_name": "", "playing": False, "paused": False, "volume": 50, "current": None, "queue": [], "queue_count": 0}
+
+
+async def handle_dashboard_action(guild, payload):
+    if not DASHBOARD_ACTION_HANDLER:
+        raise RuntimeError("Music module is not initialized yet.")
+    return await DASHBOARD_ACTION_HANDLER(guild, payload)
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
@@ -351,4 +368,128 @@ def install(main):
         state["now"] = None
         await ctx.send("👋 Left the voice channel and cleared the music queue.")
 
+
+    async def dashboard_action(guild, payload):
+        action = str(payload.get("action") or "")
+        state = player(guild.id)
+        voice = guild.voice_client
+
+        if action == "music_join":
+            raw_channel_id = str(payload.get("channel_id") or "").strip()
+            if not raw_channel_id.isdigit():
+                raise ValueError("Choose a voice channel first.")
+            channel = guild.get_channel(int(raw_channel_id))
+            if not isinstance(channel, discord.VoiceChannel):
+                raise ValueError("Choose a voice channel that belongs to this server.")
+            if voice and voice.is_connected():
+                if voice.channel == channel:
+                    return {"message": f"Already connected to {channel.name}."}
+                await voice.move_to(channel)
+            else:
+                await channel.connect()
+            return {"message": f"Connected to {channel.name}."}
+
+        if action == "music_play":
+            query = str(payload.get("query") or "").strip()[:300]
+            if not query:
+                raise ValueError("Enter a song title or URL.")
+            if len(state["queue"]) >= MAX_QUEUE:
+                raise ValueError(f"The music queue is full ({MAX_QUEUE} upcoming tracks).")
+            raw_channel_id = str(payload.get("channel_id") or "").strip()
+            if voice is None or not voice.is_connected():
+                if not raw_channel_id.isdigit():
+                    raise ValueError("Choose a voice channel, or use !join in Discord first.")
+                channel = guild.get_channel(int(raw_channel_id))
+                if not isinstance(channel, discord.VoiceChannel):
+                    raise ValueError("Choose a voice channel that belongs to this server.")
+                voice = await channel.connect()
+            target = query if urlparse(query).scheme in ("http", "https") else "ytsearch1:" + query
+            track = await asyncio.to_thread(_extract_track, target)
+            track["requested_by"] = "website"
+            track["channel_id"] = int(guild.system_channel.id) if guild.system_channel else 0
+            state["queue"].append(track)
+            start_player(guild.id)
+            return {"message": f"Added {track['title']} to the queue."}
+
+        if action == "music_volume":
+            try:
+                percent = int(payload.get("volume"))
+            except (TypeError, ValueError):
+                raise ValueError("Choose a volume between 5 and 150 percent.")
+            if not 5 <= percent <= 150:
+                raise ValueError("Choose a volume between 5 and 150 percent.")
+            state["volume"] = percent / 100
+            if voice and isinstance(voice.source, discord.PCMVolumeTransformer):
+                voice.source.volume = state["volume"]
+            return {"message": f"Volume set to {percent} percent."}
+
+        if action not in {"music_skip", "music_pause", "music_resume", "music_stop", "music_leave"}:
+            raise ValueError("Unknown music action.")
+
+        if action == "music_leave":
+            state["queue"].clear()
+            if voice and voice.is_connected():
+                if voice.is_playing() or voice.is_paused():
+                    voice.stop()
+                await voice.disconnect(force=True)
+            state["now"] = None
+            return {"message": "Disconnected from voice and cleared the queue."}
+
+        if action == "music_stop":
+            state["queue"].clear()
+            if voice and (voice.is_playing() or voice.is_paused()):
+                voice.stop()
+            state["now"] = None
+            return {"message": "Stopped playback and cleared the queue."}
+
+        if not voice or not voice.is_connected():
+            raise ValueError("Gargand is not connected to a voice channel.")
+        if action == "music_skip":
+            if not state["now"] or not (voice.is_playing() or voice.is_paused()):
+                raise ValueError("Nothing is currently playing.")
+            voice.stop()
+            return {"message": "Skipped the current track."}
+        if action == "music_pause":
+            if not voice.is_playing():
+                raise ValueError("There is no playing track to pause.")
+            voice.pause()
+            return {"message": "Music paused."}
+        if action == "music_resume":
+            if not voice.is_paused():
+                raise ValueError("Music is not paused.")
+            voice.resume()
+            return {"message": "Music resumed."}
+        raise ValueError("Unknown music action.")
+
+    def dashboard_snapshot(guild):
+        state = PLAYERS.get(guild.id, {"queue": deque(), "now": None, "volume": 0.5})
+        voice = guild.voice_client
+        current = state.get("now")
+        def safe_track(track):
+            if not track:
+                return None
+            return {
+                "title": str(track.get("title") or "Unknown track")[:180],
+                "url": str(track.get("webpage_url") or "")[:1000],
+                "duration": int(track.get("duration") or 0),
+                "requested_by": str(track.get("requested_by") or ""),
+            }
+        queued = [safe_track(track) for track in list(state.get("queue", []))[:10]]
+        return {
+            "connected": bool(voice and voice.is_connected()),
+            "channel_id": str(voice.channel.id) if voice and voice.is_connected() else "",
+            "channel_name": str(voice.channel.name) if voice and voice.is_connected() else "",
+            "playing": bool(voice and voice.is_playing()),
+            "paused": bool(voice and voice.is_paused()),
+            "volume": int(round(float(state.get("volume", 0.5)) * 100)),
+            "current": safe_track(current),
+            "queue": queued,
+            "queue_count": len(state.get("queue", [])),
+        }
+
+    global DASHBOARD_ACTION_HANDLER, DASHBOARD_SNAPSHOT_PROVIDER
+    DASHBOARD_ACTION_HANDLER = dashboard_action
+    DASHBOARD_SNAPSHOT_PROVIDER = dashboard_snapshot
+
+    print("Gargand music commands loaded: join, play, skip, pause, resume, stop, queue, nowplaying, volume, leave.")
     print("Gargand music commands loaded: play, skip, pause, resume, stop, queue, nowplaying, volume, leave.")
