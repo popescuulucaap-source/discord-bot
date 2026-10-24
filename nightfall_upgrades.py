@@ -5,53 +5,109 @@ Adds Auto-Mod, XP/levels, analytics, AI channel memory, and extra admin tooling.
 """
 import asyncio
 import importlib
+import ipaddress
 import os
 import re
 import sqlite3
 import sys
 import time
 import random
+import unicodedata
 
 import requests
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 INSTALLED = False
 WINDOWS = defaultdict(deque)
 XP_COOLDOWNS = {}
 NSFW_TEXT_PATTERNS = (
-    re.compile(r"\b(?:onlyfans|pornhub|xvideos|xnxx|xhamster|redtube|rule34)\b", re.I),
-    re.compile(r"\b(?:send|share|trade|drop|post)\s+(?:me\s+)?(?:nudes?|nude pics?|explicit pics?|lewd pics?)\b", re.I),
-    re.compile(r"\b(?:nudes?|explicit pics?|lewd pics?)\b", re.I),
+    re.compile(r"\b(?:onlyfans|pornhub|xvideos|xnxx|xhamster|redtube|rule34|e621)\b", re.I),
+    re.compile(r"\b(?:send|share|trade|drop|post|dm)\s+(?:(?:me|your|ur|their)\s+)?(?:nudes?|nude pics?|nude photos?|explicit pics?|explicit photos?|lewd pics?)\b", re.I),
+    re.compile(r"\b(?:nudes?|nude pics?|nude photos?|explicit pics?|explicit photos?|lewd pics?)\b", re.I),
 )
 NSFW_MAX_IMAGES = 3
 NSFW_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>()]+", re.I)
+SUSPICIOUS_HOSTS = frozenset({
+    "grabify.link", "iplogger.org", "iplogger.com", "iplogger.ru",
+    "2no.co", "yip.su", "discordnitro.com", "discord-nitro.com",
+    "discordgift.site", "discord-gift.com", "discord-gifts.com",
+    "discordapp-gift.com", "discordnitro.net", "steamcommunity.xyz",
+})
+OFFICIAL_DISCORD_HOSTS = (
+    "discord.com", "discord.gg", "discordapp.com", "discordapp.net",
+    "discord.media", "discordstatus.com",
+)
+PHISHING_BRAND_WORDS = ("nitro", "gift", "verify", "login", "secure", "free", "support", "claim")
+
+
+def _normalise_nsfw_text(text):
+    """Normalise punctuation, Unicode compatibility forms and common number substitutions."""
+    value = unicodedata.normalize("NFKC", str(text or "")[:6000]).casefold()
+    leetspeak = value.translate(str.maketrans({
+        "0": "o", "1": "i", "3": "e", "4": "a",
+        "5": "s", "7": "t", "@": "a", "$": "s",
+    }))
+    compact = re.sub(r"[^a-z0-9]+", "", leetspeak)
+    return value, compact
 
 
 def _fallback_nsfw_text(text):
-    """Small local fallback when the external moderation key is not configured."""
-    text = str(text or "")[:6000]
-    return any(pattern.search(text) for pattern in NSFW_TEXT_PATTERNS)
+    """Local text fallback if the remote moderation API is not configured."""
+    value, compact = _normalise_nsfw_text(text)
+    if any(pattern.search(value) for pattern in NSFW_TEXT_PATTERNS):
+        return True
+    compact_terms = (
+        "onlyfans", "pornhub", "xvideos", "xnxx", "xhamster", "redtube",
+        "rule34", "e621", "sendnudes", "nudephoto", "nudepic",
+        "explicitpic", "explicitphoto", "lewdpic",
+    )
+    return any(term in compact for term in compact_terms)
+
+
+def _append_unique_image(urls, url, *, force=False):
+    url = str(url or "").strip().strip("<>").rstrip(".,!?;:)]}")
+    if not url.startswith("https://") or url in urls or len(url) > 2000:
+        return
+    path = urlparse(url).path.casefold()
+    if force or path.endswith(IMAGE_EXTENSIONS):
+        urls.append(url)
 
 
 def _message_image_urls(message):
-    """Return a short list of image attachments suitable for the moderation endpoint."""
+    """Collect image attachments and image embeds, capped to protect API and bandwidth."""
     urls = []
     for attachment in list(getattr(message, "attachments", []) or []):
         filename = str(getattr(attachment, "filename", "") or "").casefold()
         content_type = str(getattr(attachment, "content_type", "") or "").casefold()
-        is_image = content_type.startswith("image/") or filename.endswith(
-            (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")
-        )
+        is_image = content_type.startswith("image/") or filename.endswith(IMAGE_EXTENSIONS)
         size = int(getattr(attachment, "size", 0) or 0)
-        if not is_image or (size and size > NSFW_MAX_IMAGE_BYTES):
-            continue
-        url = str(getattr(attachment, "url", "") or "")
-        if url.startswith("https://") and url not in urls:
-            urls.append(url)
+        if is_image and (not size or size <= NSFW_MAX_IMAGE_BYTES):
+            _append_unique_image(urls, getattr(attachment, "url", ""), force=True)
+        if len(urls) >= NSFW_MAX_IMAGES:
+            return urls
+
+    # Direct image links in the message text are checked too.
+    for match in URL_PATTERN.finditer(str(getattr(message, "content", "") or "")):
+        _append_unique_image(urls, match.group(0))
+        if len(urls) >= NSFW_MAX_IMAGES:
+            return urls
+
+    # Discord often exposes preview images as embeds instead of attachments.
+    for item in list(getattr(message, "embeds", []) or []):
+        for attribute in ("image", "thumbnail"):
+            try:
+                proxy = getattr(item, attribute, None)
+                url = getattr(proxy, "url", None) if proxy else None
+                _append_unique_image(urls, url, force=bool(url))
+            except Exception:
+                pass
         if len(urls) >= NSFW_MAX_IMAGES:
             break
-    return urls
+    return urls[:NSFW_MAX_IMAGES]
 
 
 def _classify_nsfw(api_key, text, image_urls):
@@ -80,6 +136,46 @@ def _classify_nsfw(api_key, text, image_urls):
 
 def _moderation_key():
     return (os.getenv("OPENAI_MODERATION_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+
+
+def _suspicious_url(url):
+    """Return True for high-confidence phishing patterns without fetching the URL."""
+    raw = str(url or "").strip().rstrip(".,!?;:)]}")
+    if not raw:
+        return False
+    parsed = urlparse(raw if "://" in raw else "https://" + raw)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    host = parsed.hostname.casefold().rstrip(".")
+    if parsed.username or parsed.password:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    if host.startswith("xn--") or ".xn--" in host:
+        return True
+
+    if any(host == bad or host.endswith("." + bad) for bad in SUSPICIOUS_HOSTS):
+        return True
+    official_discord = any(host == domain or host.endswith("." + domain) for domain in OFFICIAL_DISCORD_HOSTS)
+    if not official_discord and any(root in host for root in ("discord.com", "discord.gg", "discordapp.com")):
+        return True
+    if not official_discord and "discord" in host and any(word in host for word in PHISHING_BRAND_WORDS):
+        return True
+    official_steam = host == "steampowered.com" or host.endswith(".steampowered.com") or host == "steamcommunity.com" or host.endswith(".steamcommunity.com")
+    if not official_steam and "steam" in host and any(word in host for word in ("gift", "free", "verify", "login", "trade")):
+        return True
+    return False
+
+
+def _find_suspicious_url(text):
+    for match in URL_PATTERN.finditer(str(text or "")[:6000]):
+        url = match.group(0).rstrip(".,!?;:)]}")
+        if _suspicious_url(url):
+            return url[:300]
+    return ""
 
 def install(main):
     global INSTALLED
@@ -221,6 +317,53 @@ def install(main):
                         pass
                 return
 
+        # Anti-phishing: high-confidence suspicious URLs only; no remote URL is fetched.
+        if setting(guild, "anti_phishing_enabled", False) and isinstance(member, main.discord.Member) and not main.is_staff(member):
+            try:
+                active_prefix = await main.command_prefix_for(bot, message)
+                is_command_message = bool(active_prefix) and str(message.content or "").startswith(active_prefix)
+            except Exception:
+                is_command_message = str(message.content or "").lstrip().startswith("!")
+            suspicious_url = "" if is_command_message else _find_suspicious_url(message.content)
+            if suspicious_url:
+                try:
+                    await message.delete()
+                except (main.discord.Forbidden, main.discord.NotFound, main.discord.HTTPException):
+                    pass
+
+                try:
+                    await member.send(embed=embed(
+                        "🛡️ Gargand · Anti-phishing",
+                        f"A message you sent in **{guild.name}** contained a link that matched Gargand's high-risk link rules. "
+                        "It was removed. If you believe this was a mistake, ask a server moderator to review it.",
+                        main.WARNING,
+                    ))
+                except (main.discord.Forbidden, main.discord.HTTPException):
+                    pass
+
+                log_id = setting(guild, "automod_log_channel_id") or setting(guild, "logs_channel_id")
+                try:
+                    log_channel = guild.get_channel(int(log_id)) if log_id else None
+                except (TypeError, ValueError):
+                    log_channel = None
+                if isinstance(log_channel, main.discord.TextChannel):
+                    try:
+                        report = embed(
+                            "🛡️ Anti-phishing action",
+                            f"**Member:** {member.mention} ({member.id})\n"
+                            f"**Channel:** {message.channel.mention}\n"
+                            f"**Matched URL:** {suspicious_url[:220]}\n"
+                            f"[Open message]({message.jump_url})",
+                            main.WARNING,
+                        )
+                        await log_channel.send(
+                            embed=report,
+                            allowed_mentions=main.discord.AllowedMentions.none(),
+                        )
+                    except (main.discord.Forbidden, main.discord.HTTPException):
+                        pass
+                return
+
         if setting(guild, "analytics_enabled", False):
             analytics(guild.id, "messages")
 
@@ -315,6 +458,32 @@ def install(main):
         else:
             message = "Usage: !antinsfw status, !antinsfw on, or !antinsfw off."
         await ctx.send(embed=embed("🛡️ Gargand · Anti-NSFW", message, main.INFO))
+
+    @bot.hybrid_command(name="antiphishing", description="Enable or inspect suspicious-link protection.")
+    @main.admin_only()
+    @main.commands.guild_only()
+    async def anti_phishing_command(ctx, mode: str = "status"):
+        mode = str(mode or "status").strip().casefold()
+        if mode in ("on", "enable", "enabled"):
+            main.set_setting(ctx.guild, "anti_phishing_enabled", True)
+            message = (
+                "Anti-phishing is enabled. Gargand will remove high-confidence suspicious URLs, "
+                "fake Discord/Nitro domains, URL credential tricks, punycode hosts and raw-IP links. "
+                "Staff are exempt; review the Auto-Mod log channel for actions."
+            )
+        elif mode in ("off", "disable", "disabled"):
+            main.set_setting(ctx.guild, "anti_phishing_enabled", False)
+            message = "Anti-phishing is disabled for this server."
+        elif mode == "status":
+            enabled = bool(setting(ctx.guild, "anti_phishing_enabled", False))
+            message = (
+                f"Anti-phishing is {'enabled' if enabled else 'disabled'}.\n"
+                "Protection uses a local high-confidence rule list and does not visit suspicious URLs.\n"
+                "Use !antiphishing on or !antiphishing off."
+            )
+        else:
+            message = "Usage: !antiphishing status, !antiphishing on, or !antiphishing off."
+        await ctx.send(embed=embed("🛡️ Gargand · Anti-phishing", message, main.INFO))
 
     @bot.hybrid_command(name="reportchannel", description="Set the private channel used for member reports.")
     @main.admin_only()
