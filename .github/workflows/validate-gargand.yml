@@ -1,0 +1,21 @@
+name: Validate Gargand Python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile bot modules
+        run: |
+          python -m py_compile start_nightfall.py nightfall_upgrades.py gargand_features.py archive-2026-10-04T205709Z/main.py
