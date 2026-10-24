@@ -286,12 +286,6 @@ def install(main):
 
     bot.add_listener(upgraded_message, "on_message")
 
-    async def report_reply(ctx, text):
-        if getattr(ctx, "interaction", None):
-            await ctx.send(text, ephemeral=True)
-        else:
-            await ctx.send(text)
-
     @bot.hybrid_command(name="antinsfw", description="Enable or inspect the server's NSFW text and image filter.")
     @main.admin_only()
     @main.commands.guild_only()
@@ -332,45 +326,6 @@ def install(main):
             f"Member reports will be sent to {channel.mention}. Staff should restrict access to this channel.",
             main.SUCCESS,
         ))
-
-    @bot.hybrid_command(name="report", description="Privately report a member to server moderators.")
-    @main.commands.guild_only()
-    async def safety_report_command(ctx, member: main.discord.Member, *, reason: str):
-        reason = str(reason or "").strip()
-        if member.id == ctx.author.id:
-            await report_reply(ctx, "You cannot report yourself.")
-            return
-        if member.bot:
-            await report_reply(ctx, "Reports about bots should be sent to a server moderator.")
-            return
-        if not reason:
-            await report_reply(ctx, "Add a short reason so moderators know what to review.")
-            return
-        raw_channel_id = setting(ctx.guild, "reports_channel_id") or setting(ctx.guild, "logs_channel_id")
-        try:
-            target_id = int(raw_channel_id) if raw_channel_id is not None else 0
-        except (TypeError, ValueError):
-            target_id = 0
-        target_channel = ctx.guild.get_channel(target_id) if target_id else None
-        if not isinstance(target_channel, main.discord.TextChannel):
-            await report_reply(ctx, "Reports are not configured yet. Ask an admin to run !reportchannel #reports.")
-            return
-        report_embed = embed(
-            "📝 Member report",
-            f"Reported member: {member.mention} ({member.id})\n"
-            f"Reported by: {ctx.author.mention} ({ctx.author.id})\n"
-            f"Reason: {reason[:1200]}",
-            main.WARNING,
-        )
-        try:
-            await target_channel.send(
-                embed=report_embed,
-                allowed_mentions=main.discord.AllowedMentions.none(),
-            )
-        except main.discord.Forbidden:
-            await report_reply(ctx, "Gargand cannot post in the configured reports channel.")
-            return
-        await report_reply(ctx, "Your report was sent to the moderation team.")
 
     @bot.hybrid_command(name="level")
     @main.commands.guild_only()
