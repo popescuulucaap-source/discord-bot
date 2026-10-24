@@ -6129,6 +6129,7 @@ async def collect_guild_snapshot():
             "music": music_state if isinstance(music_state, dict) else {},
             "community": feature_state.get("community", {}) if isinstance(feature_state, dict) else {},
             "notifications": feature_state.get("notifications", {}) if isinstance(feature_state, dict) else {},
+            "audit": feature_state.get("audit", []) if isinstance(feature_state, dict) else [],
             # Publish the bot-authorized resource list through the authenticated bridge.
             "channels": [
                 {"id": str(channel.id), "name": channel.name, "type": int(channel.type.value),
