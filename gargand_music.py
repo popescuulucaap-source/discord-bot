@@ -4,8 +4,15 @@ Uses yt-dlp for metadata/stream URL extraction and FFmpeg for audio playback.
 All queue state is in memory; music queues intentionally reset when the bot restarts.
 """
 import asyncio
+import os
+import platform
 import shutil
 import shlex
+import stat
+import sys
+import tempfile
+import urllib.request
+import zipfile
 from collections import deque
 from urllib.parse import urlparse
 
@@ -33,6 +40,74 @@ async def handle_dashboard_action(guild, payload):
     if not DASHBOARD_ACTION_HANDLER:
         raise RuntimeError("Music module is not initialized yet.")
     return await DASHBOARD_ACTION_HANDLER(guild, payload)
+
+def prepare_youtube_runtime():
+    """Find Deno or bootstrap the official Linux x86_64 runtime for YouTube EJS."""
+    configured = os.getenv("GARGAND_DENO_PATH", "").strip()
+    existing = configured if configured and os.path.isfile(configured) else shutil.which("deno")
+    if existing:
+        runtime_dir = os.path.dirname(os.path.abspath(existing))
+        os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        print("Gargand music: YouTube JavaScript runtime is available.")
+        return existing
+
+    machine = platform.machine().lower()
+    if not sys.platform.startswith("linux") or machine not in {"x86_64", "amd64"}:
+        print("Gargand music warning: Deno was not found and automatic setup supports Linux x86_64 only. Set GARGAND_DENO_PATH on this host.")
+        return None
+
+    cache_root = os.getenv("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    runtime_dir = os.path.join(cache_root, "gargand", "deno")
+    target = os.path.join(runtime_dir, "deno")
+    if os.path.isfile(target) and os.access(target, os.X_OK):
+        os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        return target
+
+    os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+    archive_path = None
+    try:
+        fd, archive_path = tempfile.mkstemp(prefix="deno-", suffix=".zip", dir=runtime_dir)
+        total = 0
+        url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+        request = urllib.request.Request(url, headers={"User-Agent": "Gargand-Music/1.0"})
+        with os.fdopen(fd, "wb") as destination, urllib.request.urlopen(request, timeout=25) as response:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 120 * 1024 * 1024:
+                    raise RuntimeError("Deno download was larger than expected.")
+                destination.write(chunk)
+
+        with zipfile.ZipFile(archive_path) as archive:
+            member = next(
+                (item for item in archive.infolist()
+                 if not item.is_dir() and os.path.basename(item.filename) == "deno"),
+                None,
+            )
+            if member is None or member.file_size < 1024 * 1024 or member.file_size > 150 * 1024 * 1024:
+                raise RuntimeError("Official Deno archive did not contain a valid executable.")
+            temporary_binary = target + ".tmp"
+            with archive.open(member, "r") as source, open(temporary_binary, "wb") as destination:
+                shutil.copyfileobj(source, destination)
+            os.chmod(temporary_binary, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+            os.replace(temporary_binary, target)
+
+        os.environ["PATH"] = runtime_dir + os.pathsep + os.environ.get("PATH", "")
+        print("Gargand music: installed the official Deno runtime for YouTube extraction.")
+        return target
+    except Exception as exc:
+        print("Gargand music warning: YouTube JavaScript runtime setup failed:", type(exc).__name__, str(exc)[:180])
+        print("If YouTube searches fail, install Deno on the bot host or set GARGAND_DENO_PATH.")
+        return None
+    finally:
+        if archive_path:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
