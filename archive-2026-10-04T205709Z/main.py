@@ -6088,7 +6088,7 @@ def collect_command_catalog():
             "aliases": [],
             "permission": _command_permission(qualified),
             "usage": usage,
-            "example": _command_example(qualified, usage),
+            "example": (lambda example: "/" + example[1:] if example.startswith("!") else example)(_command_example(qualified, usage)),
         })
         seen.add(key)
     result.sort(key=lambda item: (item["category"].casefold(), item["name"].casefold(), item["mode"]))
