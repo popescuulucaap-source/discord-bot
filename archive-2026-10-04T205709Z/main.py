@@ -50,6 +50,44 @@ BRIDGE_POLL_SECONDS = 10
 bridge_task = None
 
 
+async def report_website_job_result(job, guild_id, action, status, message):
+    """Send an authenticated completion/failure result for website-triggered bot actions."""
+    if not GARGAND_WEBSITE_URL or not GARGAND_BRIDGE_SECRET:
+        return
+    try:
+        job_id = int(job.get("id"))
+    except (TypeError, ValueError, AttributeError):
+        return
+    if job_id <= 0:
+        return
+    payload = {
+        "job_id": job_id,
+        "guild_id": str(guild_id),
+        "action": str(action or "unknown")[:100],
+        "status": "success" if status == "success" else "failed",
+        "message": str(message or "")[:500],
+    }
+
+    def post():
+        for attempt in range(2):
+            try:
+                response = requests.post(
+                    f"{GARGAND_WEBSITE_URL}/api/bot/job-result",
+                    headers={"X-Gargand-Bridge-Key": GARGAND_BRIDGE_SECRET},
+                    json=payload,
+                    timeout=(5, 10),
+                )
+                response.raise_for_status()
+                return
+            except requests.RequestException as exc:
+                if attempt:
+                    print(f"Gargand dashboard result delivery failed: {type(exc).__name__}")
+                else:
+                    time.sleep(0.5)
+
+    await asyncio.to_thread(post)
+
+
 async def send_telemetry(event_type: str, guild=None, user=None, command_name: str = "", metadata=None):
     if not GARGAND_WEBSITE_URL or not GARGAND_BRIDGE_SECRET:
         return
@@ -6195,10 +6233,14 @@ async def handle_website_job(job):
         guild_id = int(job.get("guild_id", 0))
     except (TypeError, ValueError):
         return
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
     guild = bot.get_guild(guild_id)
     if not guild:
+        await report_website_job_result(
+            job, guild_id, payload.get("action"), "failed",
+            "Gargand is not connected to this Discord server right now."
+        )
         return
-    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
 
     if job.get("kind") == "official_announcement":
         if guild_id != OFFICIAL_GUILD_ID:
@@ -6326,13 +6368,17 @@ async def handle_website_job(job):
                         "dashboard_action", guild=guild, user=bot.user,
                         metadata={"action": action, "result": "success", "message": str((result or {}).get("message", ""))[:180]}
                     ))
+                    message = str((result or {}).get("message") or "Music action completed.")
+                    await report_website_job_result(job, guild_id, action, "success", message)
                     print(f"Website music action {action!r} completed for guild {guild_id}.")
                 except Exception as exc:
+                    message = str(exc) or "Music action failed."
                     asyncio.create_task(send_telemetry(
                         "dashboard_action", guild=guild, user=bot.user,
-                        metadata={"action": action, "result": "failed", "error_type": type(exc).__name__, "reason": str(exc)[:180]}
+                        metadata={"action": action, "result": "failed", "error_type": type(exc).__name__, "reason": message[:180]}
                     ))
-                    print(f"Website music action {action!r} failed for guild {guild_id}: {type(exc).__name__}: {str(exc)[:160]}")
+                    await report_website_job_result(job, guild_id, action, "failed", message)
+                    print(f"Website music action {action!r} failed for guild {guild_id}: {type(exc).__name__}: {message[:160]}")
                 return
             if action.startswith("notification_"):
                 import gargand_features
@@ -6342,13 +6388,17 @@ async def handle_website_job(job):
                         "dashboard_action", guild=guild, user=bot.user,
                         metadata={"action": action, "result": "success", "message": str((result or {}).get("message", ""))[:180]}
                     ))
+                    message = str((result or {}).get("message") or "Notification action completed.")
+                    await report_website_job_result(job, guild_id, action, "success", message)
                     print(f"Website notification action {action!r} completed for guild {guild_id}.")
                 except Exception as exc:
+                    message = str(exc) or "Notification action failed."
                     asyncio.create_task(send_telemetry(
                         "dashboard_action", guild=guild, user=bot.user,
-                        metadata={"action": action, "result": "failed", "error_type": type(exc).__name__, "reason": str(exc)[:180]}
+                        metadata={"action": action, "result": "failed", "error_type": type(exc).__name__, "reason": message[:180]}
                     ))
-                    print(f"Website notification action {action!r} failed for guild {guild_id}: {type(exc).__name__}: {str(exc)[:160]}")
+                    await report_website_job_result(job, guild_id, action, "failed", message)
+                    print(f"Website notification action {action!r} failed for guild {guild_id}: {type(exc).__name__}: {message[:160]}")
                 return
             if action == "raid_lockdown":
                 locked, failed, restore_at = await start_raid_lockdown(guild, 10, actor=bot.user, reason="Dashboard emergency control")
