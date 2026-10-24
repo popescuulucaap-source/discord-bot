@@ -5965,19 +5965,171 @@ def collect_guild_health(guild, settings):
     }
 
 
+def _command_category(name):
+    name = str(name or "").lower()
+    if any(token in name for token in ("ban", "kick", "warn", "timeout", "purge", "lock", "jail", "case", "appeal", "recover", "clearwarnings")):
+        return "Moderation"
+    if any(token in name for token in ("raid", "nuke", "anti", "security", "diagnose")):
+        return "Security"
+    if any(token in name for token in ("ticket", "application", "proof")):
+        return "Tickets"
+    if any(token in name for token in ("play", "skip", "pause", "resume", "queue", "nowplaying", "volume", "leave", "join", "stop")):
+        return "Music"
+    if any(token in name for token in ("rss", "anime", "image")):
+        return "Feeds & search"
+    if any(token in name for token in ("achievement", "quest", "season", "party", "leaderboard", "level", "xp", "suggest", "vouch", "poll")):
+        return "Community"
+    if any(token in name for token in ("giveaway", "daily", "coinflip", "blackjack", "roulette", "highlow", "roll", "rps", "8ball", "choose", "joke", "riddle", "poem", "story", "roast", "compliment", "quiz", "namegen", "caption", "ask", "aiimage")):
+        return "Fun & AI"
+    if any(token in name for token in ("setup", "configbackup", "official", "analytics", "admin")):
+        return "Admin tools"
+    return "Utility"
+
+
+def _command_permission(name):
+    name = str(name or "").lower()
+    admin_only = {
+        "setup", "configbackup", "analytics", "securitycheck", "diagnose",
+        "rss add", "rss list", "rss remove", "animewatch", "animeunwatch",
+        "animewatches", "auditlog", "official", "toggle_jail",
+    }
+    staff_only = {
+        "ban", "kick", "warn", "timeout", "jail", "unjail", "purge",
+        "clearwarnings", "announce", "raidlockdown", "raidrelease",
+        "securitycheck", "auditlog", "recover", "configbackup",
+    }
+    if name in admin_only:
+        return "Server administrator"
+    if name in staff_only:
+        return "Server staff"
+    return "Server members"
+
+
+def _command_example(name, usage):
+    name = str(name or "").lower()
+    examples = {
+        "play": "!play lo-fi beats",
+        "join": "!join",
+        "party create": "!party create Night Owls",
+        "party join": "!party join Night Owls",
+        "image": "!image space lion",
+        "rss add": "!rss add https://example.com/feed.xml",
+        "animewatch": "!animewatch 21",
+        "quest": "!quest",
+        "season": "!season",
+        "auditlog": "!auditlog 10",
+        "volume": "!volume 80",
+        "remind": "!remind 30m check the event",
+        "poll": "!poll Movie night | Comedy | Adventure",
+    }
+    return examples.get(name, usage or ("!" + name))
+
+
+def collect_command_catalog():
+    """Serialize the commands that are actually registered at runtime."""
+    result = []
+    seen = set()
+    for command in bot.walk_commands():
+        if getattr(command, "hidden", False):
+            continue
+        qualified = str(getattr(command, "qualified_name", None) or getattr(command, "name", "")).strip()
+        if not qualified:
+            continue
+        signature = str(getattr(command, "signature", "") or "").strip()
+        name = "!" + qualified + ((" " + signature) if signature else "")
+        description = str(
+            getattr(command, "help", None)
+            or getattr(command, "short_doc", None)
+            or getattr(command, "brief", None)
+            or ""
+        ).strip().split("\n", 1)[0][:350]
+        if not description and getattr(command, "app_command", None):
+            description = str(getattr(command.app_command, "description", "") or "")[:350]
+        aliases = list(dict.fromkeys(str(alias)[:80] for alias in (getattr(command, "aliases", []) or []) if str(alias).strip()))
+        key = ("prefix", qualified.lower())
+        if key not in seen:
+            result.append({
+                "command": name,
+                "name": qualified,
+                "mode": "prefix",
+                "category": _command_category(qualified),
+                "description": description or "Run this Gargand command.",
+                "aliases": aliases,
+                "permission": _command_permission(qualified),
+                "usage": name,
+                "example": _command_example(qualified, name),
+            })
+            seen.add(key)
+
+    try:
+        slash_commands = bot.tree.walk_commands()
+    except Exception:
+        slash_commands = []
+    for command in slash_commands:
+        qualified = str(getattr(command, "qualified_name", None) or getattr(command, "name", "")).strip()
+        if not qualified:
+            continue
+        key = ("slash", qualified.lower())
+        if key in seen:
+            continue
+        description = str(getattr(command, "description", "") or "").strip()[:350]
+        signature = ""
+        for parameter in getattr(command, "parameters", []) or []:
+            pname = str(getattr(parameter, "name", "") or "")
+            if pname:
+                signature += f" <{pname}>"
+        usage = "/" + qualified + signature
+        result.append({
+            "command": usage,
+            "name": qualified,
+            "mode": "slash",
+            "category": _command_category(qualified),
+            "description": description or "Run this Gargand slash command.",
+            "aliases": [],
+            "permission": _command_permission(qualified),
+            "usage": usage,
+            "example": _command_example(qualified, usage),
+        })
+        seen.add(key)
+    result.sort(key=lambda item: (item["category"].casefold(), item["name"].casefold(), item["mode"]))
+    return result[:500]
+
+
 async def collect_guild_snapshot():
     snapshot = []
-    for guild in bot.guilds:
+    command_catalog = collect_command_catalog()
+    music_module = None
+    feature_module = None
+    try:
+        import gargand_music as music_module
+    except Exception:
+        music_module = None
+    try:
+        import gargand_features as feature_module
+    except Exception:
+        feature_module = None
+
+    for index, guild in enumerate(bot.guilds):
         settings = get_settings(guild.id)
-        snapshot.append({
+        try:
+            music_state = music_module.dashboard_snapshot(guild) if music_module else {}
+        except Exception:
+            music_state = {}
+        try:
+            feature_state = feature_module.dashboard_snapshot(guild.id) if feature_module else {}
+        except Exception:
+            feature_state = {}
+        item = {
             "id": str(guild.id),
             "name": guild.name,
             "member_count": guild.member_count,
             "invite_url": await build_guild_invite(guild),
             "settings": settings,
             "health": collect_guild_health(guild, settings),
+            "music": music_state if isinstance(music_state, dict) else {},
+            "community": feature_state.get("community", {}) if isinstance(feature_state, dict) else {},
+            "notifications": feature_state.get("notifications", {}) if isinstance(feature_state, dict) else {},
             # Publish the bot-authorized resource list through the authenticated bridge.
-            # OAuth user tokens cannot read guild channels/roles from Discord's API.
             "channels": [
                 {"id": str(channel.id), "name": channel.name, "type": int(channel.type.value),
                  "position": int(getattr(channel, "position", 0))}
@@ -5988,7 +6140,12 @@ async def collect_guild_snapshot():
                 {"id": str(role.id), "name": role.name, "position": int(role.position)}
                 for role in guild.roles if role.id != guild.id
             ],
-        })
+        }
+        # The command list is global to Gargand; attach it once rather than duplicating
+        # hundreds of rows in every guild's heartbeat.
+        if index == 0:
+            item["command_catalog"] = command_catalog
+        snapshot.append(item)
     return snapshot
 
 def poll_nightfall_website():
