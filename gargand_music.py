@@ -183,6 +183,31 @@ def install(main):
         if task is None or task.done():
             state["task"] = asyncio.create_task(player_loop(guild_id))
 
+    @bot.command(name="join", help="Join your current voice channel.")
+    @main.commands.guild_only()
+    async def join(ctx):
+        member_voice = getattr(ctx.author, "voice", None)
+        if not member_voice or not member_voice.channel:
+            await ctx.send("Join a voice channel first, then use this command.")
+            return
+
+        current_voice = voice_for(ctx)
+        if current_voice and current_voice.is_connected():
+            if current_voice.channel == member_voice.channel:
+                await ctx.send(f"✅ I'm already connected to **{current_voice.channel.name}**.")
+            else:
+                await ctx.send(f"I'm already connected to **{current_voice.channel.name}**. Use `!leave` first if you want me to switch.")
+            return
+
+        voice = await ensure_voice(ctx)
+        if voice:
+            await ctx.send(
+                embed=music_embed(
+                    "🔊 Joined voice channel",
+                    f"I'm now connected to **{voice.channel.name}**. Use `!play <song or URL>` to start music."
+                )
+            )
+
     @bot.command(name="play", help="Play a track or search for music in your voice channel.")
     @main.commands.guild_only()
     async def play(ctx, *, query: str):
