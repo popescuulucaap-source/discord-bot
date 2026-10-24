@@ -142,7 +142,13 @@ def install(main):
             cooldown = max(5, int(setting(guild, "xp_cooldown_seconds", 30) or 30))
             if now-XP_COOLDOWNS.get(key, 0) >= cooldown:
                 XP_COOLDOWNS[key] = now
-                _, level, leveled = add_xp(guild.id, member.id, random.randint(8,15))
+                try:
+                    xp_amount = max(0, min(100, int(setting(guild, "xp_per_message", 10) or 0)))
+                except (TypeError, ValueError):
+                    xp_amount = 10
+                if xp_amount <= 0:
+                    return
+                _, level, leveled = add_xp(guild.id, member.id, xp_amount)
                 if leveled:
                     target = guild.get_channel(setting(guild, "levelup_channel_id") or message.channel.id)
                     if isinstance(target, main.discord.TextChannel):
