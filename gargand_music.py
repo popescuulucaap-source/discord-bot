@@ -106,10 +106,12 @@ def install(main):
     bot = main.bot
 
     def player(guild_id):
-        return PLAYERS.setdefault(
+        state = PLAYERS.setdefault(
             guild_id,
-            {"queue": deque(), "now": None, "volume": 0.5, "task": None},
+            {"queue": deque(), "now": None, "volume": 0.5, "task": None, "last_error": ""},
         )
+        state.setdefault("last_error", "")
+        return state
 
     def music_embed(title, description):
         return main.embed(title, description, main.INFO)
@@ -170,10 +172,12 @@ def install(main):
                         loop.call_soon_threadsafe(finished.set)
 
                     voice.play(source, after=after_playback)
+                    state["last_error"] = ""
                     await finished.wait()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    state["last_error"] = str(exc)[:400] or type(exc).__name__
                     print("Gargand music player warning:", type(exc).__name__, str(exc)[:200])
                     text_channel = bot.get_channel(int(track.get("channel_id") or 0))
                     if text_channel:
@@ -411,6 +415,7 @@ def install(main):
             track = await asyncio.to_thread(_extract_track, target)
             track["requested_by"] = "website"
             track["channel_id"] = int(guild.system_channel.id) if guild.system_channel else 0
+            state["last_error"] = ""
             state["queue"].append(track)
             start_player(guild.id)
             return {"message": f"Added {track['title']} to the queue."}
@@ -466,7 +471,7 @@ def install(main):
         raise ValueError("Unknown music action.")
 
     def dashboard_snapshot(guild):
-        state = PLAYERS.get(guild.id, {"queue": deque(), "now": None, "volume": 0.5})
+        state = player(guild.id)
         voice = guild.voice_client
         current = state.get("now")
         def safe_track(track):
@@ -489,6 +494,7 @@ def install(main):
             "current": safe_track(current),
             "queue": queued,
             "queue_count": len(state.get("queue", [])),
+            "last_error": str(state.get("last_error") or "")[:400],
         }
 
     global DASHBOARD_ACTION_HANDLER, DASHBOARD_SNAPSHOT_PROVIDER
