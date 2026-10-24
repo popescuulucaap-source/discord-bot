@@ -396,13 +396,17 @@ def install(main):
             if len(state["queue"]) >= MAX_QUEUE:
                 raise ValueError(f"The music queue is full ({MAX_QUEUE} upcoming tracks).")
             raw_channel_id = str(payload.get("channel_id") or "").strip()
-            if voice is None or not voice.is_connected():
-                if not raw_channel_id.isdigit():
-                    raise ValueError("Choose a voice channel, or use !join in Discord first.")
+            if raw_channel_id.isdigit():
                 channel = guild.get_channel(int(raw_channel_id))
                 if not isinstance(channel, discord.VoiceChannel):
                     raise ValueError("Choose a voice channel that belongs to this server.")
-                voice = await channel.connect()
+                if voice and voice.is_connected():
+                    if voice.channel != channel:
+                        await voice.move_to(channel)
+                else:
+                    voice = await channel.connect()
+            elif voice is None or not voice.is_connected():
+                raise ValueError("Choose a voice channel, or use !join in Discord first.")
             target = query if urlparse(query).scheme in ("http", "https") else "ytsearch1:" + query
             track = await asyncio.to_thread(_extract_track, target)
             track["requested_by"] = "website"
